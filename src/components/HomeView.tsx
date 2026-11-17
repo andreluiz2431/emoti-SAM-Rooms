@@ -63,7 +63,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
             Avalie experiências afetivas em tempo real, com o formato pictórico do emoti-SAM
           </h1>
           <p className="text-base text-slate-600 leading-relaxed max-w-2xl">
-            Crie salas interativas estilo Kahoot para medir <strong>Valência</strong>,{' '}
+            Crie salas interativas para medir <strong>Valência</strong>,{' '}
             <strong>Excitação</strong> e <strong>Dominância</strong> no uso de sistemas computacionais
             ou em ações de extensão universitária — sem exigir cadastro ou login dos participantes.
           </p>
