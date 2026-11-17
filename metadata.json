@@ -1,0 +1,6 @@
+{
+  "name": "emoti-SAM Rooms",
+  "description": "Plataforma interativa estilo Kahoot para avaliação da experiência afetiva usando o instrumento científico emoti-SAM (Valência, Excitação e Dominância) em sistemas computacionais e ações de extensão universitária.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
