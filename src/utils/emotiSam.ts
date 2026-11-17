@@ -2,8 +2,17 @@ export type ContextType = 'system' | 'extension';
 export type ScaleType = 5 | 9;
 export type DimensionKey = 'valence' | 'arousal' | 'dominance';
 
+export interface RoomQuestion {
+  id: string;
+  prompt: string;
+}
+
 export interface RoomResponse {
   id: string;
+  submissionId?: string;
+  questionId?: string;
+  questionIndex?: number;
+  questionPrompt?: string;
   participantName: string;
   valence: number;
   arousal: number;
@@ -16,6 +25,7 @@ export interface RoomPublic {
   pin: string;
   title: string;
   question: string;
+  questions: RoomQuestion[];
   contextType: ContextType;
   scale: ScaleType;
   allowComments: boolean;
@@ -28,6 +38,7 @@ export interface RoomAdmin {
   pin: string;
   title: string;
   question: string;
+  questions: RoomQuestion[];
   contextType: ContextType;
   scale: ScaleType;
   allowComments: boolean;
@@ -42,6 +53,7 @@ export interface ExportedRoomPayload {
   pin: string;
   title: string;
   question: string;
+  questions: RoomQuestion[];
   contextType: ContextType;
   scale: ScaleType;
   allowComments: boolean;
@@ -218,6 +230,13 @@ function escapeCsvCell(value: string | number): string {
   return str;
 }
 
+export function getRoomQuestionsList(room: Pick<RoomPublic, 'question' | 'questions'>): RoomQuestion[] {
+  if (Array.isArray(room.questions) && room.questions.length > 0) {
+    return room.questions;
+  }
+  return room.question ? [{ id: 'q1', prompt: room.question }] : [];
+}
+
 /**
  * Generates Excel-friendly Portuguese CSV (UTF-8 BOM + semicolon separator).
  */
@@ -227,6 +246,8 @@ export function buildRoomCsv(room: RoomAdmin): string {
     'Titulo_Sala',
     'Contexto_Tipo',
     'Escala',
+    'Numero_Questao',
+    'Questao',
     'ID_Resposta',
     'Nome_Participante',
     'Data_Hora_ISO',
@@ -238,31 +259,42 @@ export function buildRoomCsv(room: RoomAdmin): string {
 
   const contextLabel = getContextLabel(room.contextType);
   const scaleLabel = `${room.scale} pontos`;
+  const questions = getRoomQuestionsList(room);
+  const questionMap = new Map(questions.map((q, idx) => [q.id, { index: idx + 1, prompt: q.prompt }]));
 
-  const rows = room.responses.map((resp) => [
-    escapeCsvCell(room.pin),
-    escapeCsvCell(room.title),
-    escapeCsvCell(contextLabel),
-    escapeCsvCell(scaleLabel),
-    escapeCsvCell(resp.id),
-    escapeCsvCell(resp.participantName),
-    escapeCsvCell(resp.submittedAt),
-    escapeCsvCell(resp.valence),
-    escapeCsvCell(resp.arousal),
-    escapeCsvCell(resp.dominance),
-    escapeCsvCell(resp.comment || ''),
-  ].join(';'));
+  const rows = room.responses.map((resp) => {
+    const matched = resp.questionId ? questionMap.get(resp.questionId) : undefined;
+    const qIndex = resp.questionIndex || matched?.index || 1;
+    const qPrompt = resp.questionPrompt || matched?.prompt || room.question || '';
+    return [
+      escapeCsvCell(room.pin),
+      escapeCsvCell(room.title),
+      escapeCsvCell(contextLabel),
+      escapeCsvCell(scaleLabel),
+      escapeCsvCell(qIndex),
+      escapeCsvCell(qPrompt),
+      escapeCsvCell(resp.id),
+      escapeCsvCell(resp.participantName),
+      escapeCsvCell(resp.submittedAt),
+      escapeCsvCell(resp.valence),
+      escapeCsvCell(resp.arousal),
+      escapeCsvCell(resp.dominance),
+      escapeCsvCell(resp.comment || ''),
+    ].join(';');
+  });
 
   return '\uFEFF' + [headers.join(';'), ...rows].join('\r\n');
 }
 
 export function buildRoomExportJson(room: RoomAdmin): ExportedRoomPayload {
+  const questions = getRoomQuestionsList(room);
   return {
-    schemaVersion: '1.0',
+    schemaVersion: '1.1',
     exportedAt: new Date().toISOString(),
     pin: room.pin,
     title: room.title,
-    question: room.question,
+    question: questions[0]?.prompt || room.question,
+    questions,
     contextType: room.contextType,
     scale: room.scale,
     allowComments: room.allowComments,
@@ -275,6 +307,7 @@ export function buildRoomExportJson(room: RoomAdmin): ExportedRoomPayload {
 export function parseImportedRoomJson(rawJson: string): {
   title: string;
   question: string;
+  questions: RoomQuestion[];
   contextType: ContextType;
   scale: ScaleType;
   allowComments: boolean;
@@ -288,8 +321,36 @@ export function parseImportedRoomJson(rawJson: string): {
   if (typeof parsed.title !== 'string' || !parsed.title.trim()) {
     throw new Error('O arquivo JSON não contém um título de sala válido.');
   }
-  if (typeof parsed.question !== 'string' || !parsed.question.trim()) {
-    throw new Error('O arquivo JSON não contém uma pergunta de avaliação válida.');
+
+  let questions: RoomQuestion[] = [];
+  if (Array.isArray(parsed.questions)) {
+    questions = parsed.questions
+      .map((item: unknown, idx: number): RoomQuestion | null => {
+        if (typeof item === 'string' && item.trim()) {
+          return { id: `q${idx + 1}`, prompt: item.trim() };
+        }
+        if (
+          item &&
+          typeof item === 'object' &&
+          typeof (item as RoomQuestion).prompt === 'string' &&
+          (item as RoomQuestion).prompt.trim()
+        ) {
+          const rawId = (item as RoomQuestion).id;
+          return {
+            id: typeof rawId === 'string' && rawId.trim() ? rawId.trim() : `q${idx + 1}`,
+            prompt: (item as RoomQuestion).prompt.trim(),
+          };
+        }
+        return null;
+      })
+      .filter((q: RoomQuestion | null): q is RoomQuestion => q !== null);
+  }
+
+  if (questions.length === 0) {
+    if (typeof parsed.question !== 'string' || !parsed.question.trim()) {
+      throw new Error('O arquivo JSON não contém perguntas de avaliação válidas.');
+    }
+    questions = [{ id: 'q1', prompt: parsed.question.trim() }];
   }
 
   const contextType: ContextType = parsed.contextType === 'extension' ? 'extension' : 'system';
@@ -310,7 +371,8 @@ export function parseImportedRoomJson(rawJson: string): {
 
   return {
     title: parsed.title.trim(),
-    question: parsed.question.trim(),
+    question: questions[0].prompt,
+    questions,
     contextType,
     scale,
     allowComments,

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   RETENTION_DAYS,
+  addQuestionToRoom,
   addResponse,
   authenticateAdmin,
   cleanupExpiredRooms,
@@ -68,7 +69,7 @@ app.get('/api/rooms/:pin', (req, res) => {
   return res.status(result.status).json({ room: result.room });
 });
 
-// Submit participant emoti-SAM response
+// Submit participant emoti-SAM response (single or multi-question)
 app.post('/api/rooms/:pin/respond', (req, res) => {
   const result = addResponse(DATA_DIR, req.params.pin, req.body);
   if (result.error) {
@@ -76,7 +77,20 @@ app.post('/api/rooms/:pin/respond', (req, res) => {
   }
   return res.status(result.status).json({
     response: result.response,
+    responses: result.responses,
     responseCount: result.responseCount,
+  });
+});
+
+// Add a new question to an existing room (authenticated via creator CPF)
+app.post('/api/rooms/:pin/questions', (req, res) => {
+  const result = addQuestionToRoom(DATA_DIR, req.params.pin, req.body);
+  if (result.error) {
+    return res.status(result.status).json({ error: result.error });
+  }
+  return res.status(result.status).json({
+    room: result.room,
+    addedQuestion: result.addedQuestion,
   });
 });
 

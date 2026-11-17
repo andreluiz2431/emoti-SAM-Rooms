@@ -8,8 +8,10 @@ import {
   Download,
   FileJson,
   FileSpreadsheet,
+  ListChecks,
   Maximize2,
   Minimize2,
+  Plus,
   RefreshCw,
   Search,
   Trash2,
@@ -22,6 +24,7 @@ import {
   computeDimensionStats,
   formatRemainingRetention,
   getContextLabel,
+  getRoomQuestionsList,
   type RoomAdmin,
 } from '../utils/emotiSam';
 
@@ -44,10 +47,16 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
   const [refreshing, setRefreshing] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [presentationMode, setPresentationMode] = useState(false);
+  const [selectedQuestionId, setSelectedQuestionId] = useState<string>('all');
+  const [newQuestionPrompt, setNewQuestionPrompt] = useState('');
+  const [addingQuestion, setAddingQuestion] = useState(false);
+  const [questionError, setQuestionError] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState('');
+
+  const questions = useMemo(() => getRoomQuestionsList(room), [room]);
 
   const shareUrl = useMemo(() => {
     if (typeof window === 'undefined') return `/?pin=${room.pin}`;
@@ -108,7 +117,20 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
     return () => clearInterval(interval);
   }, [refreshRoom]);
 
+  const scopedResponses = useMemo(() => {
+    if (selectedQuestionId === 'all') return room.responses;
+    return room.responses.filter(
+      (r) => (r.questionId || questions[0]?.id || 'q1') === selectedQuestionId
+    );
+  }, [room.responses, selectedQuestionId, questions]);
+
   const statsList = useMemo(() => {
+    return DIMENSIONS.map((dim) =>
+      computeDimensionStats(scopedResponses, room.scale, dim.key, dim.title)
+    );
+  }, [scopedResponses, room.scale]);
+
+  const overallStatsList = useMemo(() => {
     return DIMENSIONS.map((dim) =>
       computeDimensionStats(room.responses, room.scale, dim.key, dim.title)
     );
@@ -116,16 +138,45 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
 
   const filteredResponses = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    const sorted = [...room.responses].sort(
+    const sorted = [...scopedResponses].sort(
       (a, b) => Date.parse(b.submittedAt) - Date.parse(a.submittedAt)
     );
     if (!q) return sorted;
     return sorted.filter(
       (r) =>
         r.participantName.toLowerCase().includes(q) ||
-        (r.comment && r.comment.toLowerCase().includes(q))
+        (r.comment && r.comment.toLowerCase().includes(q)) ||
+        (r.questionPrompt && r.questionPrompt.toLowerCase().includes(q))
     );
-  }, [room.responses, searchQuery]);
+  }, [scopedResponses, searchQuery]);
+
+  const handleAddQuestion = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setQuestionError('');
+    const prompt = newQuestionPrompt.trim();
+    if (prompt.length < 5) {
+      setQuestionError('A nova questão deve ter pelo menos 5 caracteres.');
+      return;
+    }
+    setAddingQuestion(true);
+    try {
+      const res = await fetch(`/api/rooms/${room.pin}/questions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cpf: creatorCpf, prompt }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || 'Não foi possível adicionar a questão.');
+      }
+      setRoom(data.room as RoomAdmin);
+      setNewQuestionPrompt('');
+    } catch (err) {
+      setQuestionError(err instanceof Error ? err.message : 'Erro ao adicionar questão.');
+    } finally {
+      setAddingQuestion(false);
+    }
+  };
 
   const handleCopyLink = async () => {
     try {
@@ -227,16 +278,23 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
 
             <div className="flex items-center gap-6">
               <div>
-                <span className="block text-xs text-slate-400">Respostas recebidas</span>
+                <span className="block text-xs text-slate-400">Avaliações recebidas</span>
                 <span className="text-4xl font-mono font-bold tabular-nums text-emerald-400">
                   {room.responses.length}
                 </span>
               </div>
               <div className="h-10 w-px bg-slate-700" />
               <div>
+                <span className="block text-xs text-slate-400">Questões ativas</span>
+                <span className="text-4xl font-mono font-bold tabular-nums text-white">
+                  {questions.length}
+                </span>
+              </div>
+              <div className="h-10 w-px bg-slate-700" />
+              <div>
                 <span className="block text-xs text-slate-400">Valência / Excitação / Dominância</span>
                 <span className="text-xl font-mono font-semibold tabular-nums text-white">
-                  {statsList[0].mean.toFixed(1)} · {statsList[1].mean.toFixed(1)} · {statsList[2].mean.toFixed(1)}
+                  {overallStatsList[0].mean.toFixed(1)} · {overallStatsList[1].mean.toFixed(1)} · {overallStatsList[2].mean.toFixed(1)}
                 </span>
               </div>
             </div>
@@ -338,10 +396,14 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
               <span aria-hidden="true">·</span>
               <span>Escala de {room.scale} pontos</span>
               <span aria-hidden="true">·</span>
+              <span>{questions.length} {questions.length === 1 ? 'questão' : 'questões'}</span>
+              <span aria-hidden="true">·</span>
               <span>Criada em {new Date(room.createdAt).toLocaleDateString('pt-BR')}</span>
             </div>
             <h1 className="text-2xl sm:text-3xl font-bold text-slate-900">{room.title}</h1>
-            <p className="text-base text-slate-700">{room.question}</p>
+            <p className="text-base text-slate-700">
+              {questions.length > 1 ? `Q1: ${questions[0].prompt}` : room.question}
+            </p>
           </div>
 
           {/* Real-time 30-day Retention Countdown */}
@@ -355,10 +417,10 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
             <div>
               <span className="text-xs text-slate-500 flex items-center gap-1">
                 <Users className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>Respostas</span>
+                <span>Avaliações {selectedQuestionId !== 'all' ? '(filtro)' : ''}</span>
               </span>
               <span className="mt-1 block text-2xl font-mono font-bold tabular-nums text-slate-900">
-                {room.responses.length}
+                {scopedResponses.length}
               </span>
             </div>
             {statsList.map((stat) => (
@@ -412,6 +474,73 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
         </div>
       </div>
 
+      {/* Questions Management & Add Question Live */}
+      <section aria-labelledby="questions-manage-heading" className="rounded-xl border border-slate-200 bg-white p-6 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h2 id="questions-manage-heading" className="text-lg font-bold text-slate-900 flex items-center gap-2">
+              <ListChecks className="w-5 h-5 text-blue-700" aria-hidden="true" />
+              <span>Questões da Sala ({questions.length})</span>
+            </h2>
+            <p className="text-xs text-slate-500">
+              Você pode adicionar novas perguntas a qualquer momento; novos participantes verão todas as questões em sequência.
+            </p>
+          </div>
+        </div>
+
+        <ol className="space-y-2">
+          {questions.map((q, idx) => {
+            const qCount = room.responses.filter(
+              (r) => (r.questionId || questions[0]?.id || 'q1') === q.id
+            ).length;
+            return (
+              <li
+                key={q.id}
+                className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50/70 px-3.5 py-2.5 text-sm"
+              >
+                <div className="flex items-baseline gap-2">
+                  <span className="font-mono text-xs font-bold text-blue-700 shrink-0">Q{idx + 1}</span>
+                  <span className="text-slate-900 font-medium">{q.prompt}</span>
+                </div>
+                <span className="text-xs font-mono tabular-nums text-slate-500 shrink-0">
+                  {qCount} {qCount === 1 ? 'resposta' : 'respostas'}
+                </span>
+              </li>
+            );
+          })}
+        </ol>
+
+        <form onSubmit={handleAddQuestion} className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5" noValidate>
+          <div className="flex-1">
+            <label htmlFor="admin-add-question" className="sr-only">
+              Nova questão para a sala
+            </label>
+            <input
+              id="admin-add-question"
+              type="text"
+              maxLength={280}
+              value={newQuestionPrompt}
+              onChange={(e) => setNewQuestionPrompt(e.target.value)}
+              placeholder={`Adicionar Questão ${questions.length + 1} (ex.: Como você se sentiu na etapa seguinte?)`}
+              className="w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-600/20"
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={addingQuestion || questions.length >= 30}
+            className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-blue-700 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-800 transition-colors cursor-pointer disabled:opacity-60 whitespace-nowrap"
+          >
+            <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+            <span>{addingQuestion ? 'Adicionando...' : 'Adicionar Questão'}</span>
+          </button>
+        </form>
+        {questionError && (
+          <p role="alert" className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+            {questionError}
+          </p>
+        )}
+      </section>
+
       {/* Visual Distribution (Figure 9 Style - Hayashi et al., 2016) */}
       <section aria-labelledby="charts-heading" className="rounded-xl border border-slate-200 bg-white p-6 space-y-5">
         <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2">
@@ -436,9 +565,48 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
           </div>
         </div>
 
-        {room.responses.length === 0 ? (
+        {questions.length > 1 && (
+          <div className="flex flex-wrap items-center gap-1.5 pt-1" role="tablist" aria-label="Filtrar gráficos por questão">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={selectedQuestionId === 'all'}
+              onClick={() => setSelectedQuestionId('all')}
+              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors cursor-pointer ${
+                selectedQuestionId === 'all'
+                  ? 'bg-slate-900 text-white'
+                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+              }`}
+            >
+              Todas ({room.responses.length})
+            </button>
+            {questions.map((q, idx) => {
+              const count = room.responses.filter(
+                (r) => (r.questionId || questions[0]?.id || 'q1') === q.id
+              ).length;
+              return (
+                <button
+                  key={q.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={selectedQuestionId === q.id}
+                  onClick={() => setSelectedQuestionId(q.id)}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-mono font-semibold transition-colors cursor-pointer ${
+                    selectedQuestionId === q.id
+                      ? 'bg-blue-700 text-white'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  Q{idx + 1} ({count})
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {scopedResponses.length === 0 ? (
           <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50/60 py-10 px-4 text-center space-y-2">
-            <p className="text-sm font-semibold text-slate-800">Nenhuma resposta registrada ainda</p>
+            <p className="text-sm font-semibold text-slate-800">Nenhuma resposta registrada {selectedQuestionId !== 'all' ? 'para esta questão ' : ''}ainda</p>
             <p className="text-xs text-slate-500 max-w-md mx-auto">
               Projete o PIN <strong className="font-mono">{room.pin}</strong> ou o QR Code acima para os
               participantes. Os gráficos atualizarão automaticamente aqui.
@@ -503,7 +671,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
       <section aria-labelledby="responses-heading" className="rounded-xl border border-slate-200 bg-white p-6 space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <h2 id="responses-heading" className="text-lg font-bold text-slate-900">
-            Respostas Individuais ({room.responses.length})
+            Respostas Individuais ({filteredResponses.length})
           </h2>
 
           <div className="relative w-full sm:w-72">
@@ -512,7 +680,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
               type="search"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Filtrar por nome ou comentário..."
+              placeholder="Filtrar por nome, questão ou comentário..."
               className="w-full rounded-lg border border-slate-300 bg-slate-50 pl-9 pr-3 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-700 focus:bg-white focus:outline-none"
             />
           </div>
@@ -520,7 +688,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
 
         {filteredResponses.length === 0 ? (
           <p className="text-sm text-slate-500 py-4 text-center">
-            {room.responses.length === 0
+            {scopedResponses.length === 0
               ? 'Aguardando o primeiro participante enviar sua avaliação.'
               : 'Nenhuma resposta encontrada para o filtro informado.'}
           </p>
@@ -530,6 +698,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
               <thead>
                 <tr className="border-b border-slate-200 text-xs font-semibold text-slate-500">
                   <th className="py-2.5 pr-4">Participante</th>
+                  {questions.length > 1 && <th className="py-2.5 px-3">Questão</th>}
                   <th className="py-2.5 px-3 text-right">Valência</th>
                   <th className="py-2.5 px-3 text-right">Excitação</th>
                   <th className="py-2.5 px-3 text-right">Dominância</th>
@@ -543,6 +712,16 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                     <td className="py-2.5 pr-4 font-medium text-slate-900 whitespace-nowrap">
                       {r.participantName}
                     </td>
+                    {questions.length > 1 && (
+                      <td className="py-2.5 px-3 text-xs text-slate-600 max-w-xs">
+                        <span className="font-mono font-bold text-blue-700 mr-1">
+                          Q{r.questionIndex || 1}
+                        </span>
+                        <span className="truncate inline-block max-w-[180px] align-bottom" title={r.questionPrompt}>
+                          {r.questionPrompt}
+                        </span>
+                      </td>
+                    )}
                     <td className="py-2.5 px-3 text-right font-mono tabular-nums font-semibold text-slate-800">
                       {r.valence}
                     </td>

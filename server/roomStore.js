@@ -130,9 +130,49 @@ function generateUniquePin(existingRooms) {
   throw new Error('Não foi possível gerar um PIN único.');
 }
 
-function sanitizeImportedResponses(responses, scale) {
+function normalizeQuestions(payload, fallbackPrompt = '') {
+  const rawList = Array.isArray(payload?.questions) ? payload.questions : null;
+  if (rawList && rawList.length > 0) {
+    const normalized = rawList
+      .map((item, idx) => {
+        if (typeof item === 'string') {
+          const prompt = item.trim().slice(0, 280);
+          return prompt ? { id: `q${idx + 1}`, prompt } : null;
+        }
+        if (item && typeof item === 'object') {
+          const prompt = typeof item.prompt === 'string' ? item.prompt.trim().slice(0, 280) : '';
+          if (!prompt) return null;
+          const id =
+            typeof item.id === 'string' && item.id.trim()
+              ? item.id.trim().slice(0, 64)
+              : `q${idx + 1}`;
+          return { id, prompt };
+        }
+        return null;
+      })
+      .filter(Boolean);
+    if (normalized.length > 0) {
+      return normalized.slice(0, 30);
+    }
+  }
+
+  const single =
+    typeof payload?.question === 'string'
+      ? payload.question.trim().slice(0, 280)
+      : fallbackPrompt.trim().slice(0, 280);
+  return single ? [{ id: 'q1', prompt: single }] : [];
+}
+
+function getRoomQuestions(room) {
+  return normalizeQuestions(room, room?.question || '');
+}
+
+function sanitizeImportedResponses(responses, scale, questions) {
   if (!Array.isArray(responses)) return [];
   const maxVal = scale === 9 ? 9 : 5;
+  const fallbackQ = questions[0] || { id: 'q1', prompt: '' };
+  const questionMap = new Map(questions.map((q, i) => [q.id, { ...q, index: i + 1 }]));
+
   return responses
     .map((item) => {
       if (!item || typeof item !== 'object') return null;
@@ -146,8 +186,25 @@ function sanitizeImportedResponses(responses, scale) {
       ) {
         return null;
       }
+      const rawQId = typeof item.questionId === 'string' && item.questionId.trim() ? item.questionId.trim() : fallbackQ.id;
+      const matchedQ = questionMap.get(rawQId);
+      const questionId = matchedQ ? matchedQ.id : rawQId;
+      const questionIndex = matchedQ
+        ? matchedQ.index
+        : Number.isInteger(Number(item.questionIndex)) && Number(item.questionIndex) > 0
+        ? Number(item.questionIndex)
+        : 1;
+      const questionPrompt =
+        typeof item.questionPrompt === 'string' && item.questionPrompt.trim()
+          ? item.questionPrompt.trim().slice(0, 280)
+          : matchedQ?.prompt || fallbackQ.prompt;
+
       return {
         id: typeof item.id === 'string' && item.id.trim() ? item.id.trim() : crypto.randomUUID(),
+        submissionId: typeof item.submissionId === 'string' && item.submissionId.trim() ? item.submissionId.trim() : undefined,
+        questionId,
+        questionIndex,
+        questionPrompt,
         participantName: typeof item.participantName === 'string' && item.participantName.trim()
           ? item.participantName.trim().slice(0, 80)
           : 'Participante',
@@ -164,24 +221,36 @@ function sanitizeImportedResponses(responses, scale) {
 }
 
 export function sanitizeRoomForAdmin(room) {
+  const questions = getRoomQuestions(room);
+  const fallbackQ = questions[0] || { id: 'q1', prompt: room.question || '' };
+  const responses = (room.responses || []).map((r) => ({
+    ...r,
+    questionId: r.questionId || fallbackQ.id,
+    questionIndex: r.questionIndex || 1,
+    questionPrompt: r.questionPrompt || fallbackQ.prompt,
+  }));
+
   return {
     pin: room.pin,
     title: room.title,
-    question: room.question,
+    question: fallbackQ.prompt,
+    questions,
     contextType: room.contextType,
     scale: room.scale,
     allowComments: room.allowComments,
     createdAt: room.createdAt,
     expiresAt: room.expiresAt,
-    responses: room.responses || [],
+    responses,
   };
 }
 
 export function sanitizeRoomForParticipant(room) {
+  const questions = getRoomQuestions(room);
   return {
     pin: room.pin,
     title: room.title,
-    question: room.question,
+    question: questions[0]?.prompt || room.question || '',
+    questions,
     contextType: room.contextType,
     scale: room.scale,
     allowComments: room.allowComments,
@@ -193,7 +262,7 @@ export function sanitizeRoomForParticipant(room) {
 
 export function createOrImportRoom(dataDir, payload, now = Date.now()) {
   const title = typeof payload?.title === 'string' ? payload.title.trim() : '';
-  const question = typeof payload?.question === 'string' ? payload.question.trim() : '';
+  const questions = normalizeQuestions(payload);
   const contextType = payload?.contextType === 'extension' ? 'extension' : payload?.contextType === 'system' ? 'system' : '';
   const scale = Number(payload?.scale) === 9 ? 9 : Number(payload?.scale) === 5 ? 5 : 0;
   const allowComments = payload?.allowComments !== false;
@@ -202,8 +271,8 @@ export function createOrImportRoom(dataDir, payload, now = Date.now()) {
   if (!title || title.length < 3) {
     return { status: 400, error: 'Informe um título com pelo menos 3 caracteres.' };
   }
-  if (!question || question.length < 5) {
-    return { status: 400, error: 'Informe a pergunta de avaliação com pelo menos 5 caracteres.' };
+  if (questions.length === 0 || questions.some((q) => q.prompt.length < 5)) {
+    return { status: 400, error: 'Todas as questões devem ter pelo menos 5 caracteres.' };
   }
   if (!contextType) {
     return { status: 400, error: 'Selecione o contexto da avaliação (Sistema Computacional ou Ação de Extensão).' };
@@ -234,7 +303,7 @@ export function createOrImportRoom(dataDir, payload, now = Date.now()) {
   }
 
   const responses = payload?.keepResponses
-    ? sanitizeImportedResponses(payload?.importedResponses, scale)
+    ? sanitizeImportedResponses(payload?.importedResponses, scale, questions)
     : [];
 
   const createdAt = now;
@@ -243,7 +312,8 @@ export function createOrImportRoom(dataDir, payload, now = Date.now()) {
   const newRoom = {
     pin,
     title: title.slice(0, 140),
-    question: question.slice(0, 280),
+    question: questions[0].prompt,
+    questions,
     contextType,
     scale,
     allowComments,
@@ -272,6 +342,52 @@ export function getPublicRoom(dataDir, pin, now = Date.now()) {
   return { status: 200, room: sanitizeRoomForParticipant(room) };
 }
 
+export function addQuestionToRoom(dataDir, pin, payload, now = Date.now()) {
+  const cleanPin = String(pin || '').trim();
+  if (!/^\d{6}$/.test(cleanPin)) {
+    return { status: 400, error: 'PIN inválido.' };
+  }
+  if (!validateCpfDigits(payload?.cpf)) {
+    return { status: 400, error: 'CPF inválido. Verifique os dígitos informados.' };
+  }
+  const prompt = typeof payload?.prompt === 'string' ? payload.prompt.trim().slice(0, 280) : '';
+  if (prompt.length < 5) {
+    return { status: 400, error: 'A nova questão deve ter pelo menos 5 caracteres.' };
+  }
+
+  const rooms = readRooms(dataDir, now);
+  const idx = rooms.findIndex((r) => r.pin === cleanPin);
+  if (idx === -1) {
+    return { status: 404, error: 'Sala não encontrada ou expirada.' };
+  }
+
+  const room = rooms[idx];
+  const candidateHash = hashCpf(payload.cpf);
+  if (!timingSafeHexEqual(candidateHash, room.cpfHash)) {
+    return { status: 403, error: 'CPF não autorizado para adicionar questões nesta sala.' };
+  }
+
+  const questions = getRoomQuestions(room);
+  if (questions.length >= 30) {
+    return { status: 400, error: 'Limite máximo de 30 questões por sala atingido.' };
+  }
+
+  const nextIndex = questions.length + 1;
+  let newId = `q${nextIndex}`;
+  const usedIds = new Set(questions.map((q) => q.id));
+  if (usedIds.has(newId)) {
+    newId = `q-${crypto.randomUUID().slice(0, 8)}`;
+  }
+
+  const updatedQuestions = [...questions, { id: newId, prompt }];
+  room.questions = updatedQuestions;
+  room.question = updatedQuestions[0].prompt;
+  rooms[idx] = room;
+  writeRooms(dataDir, rooms, now);
+
+  return { status: 201, room: sanitizeRoomForAdmin(room), addedQuestion: { id: newId, prompt } };
+}
+
 export function addResponse(dataDir, pin, payload, now = Date.now()) {
   const cleanPin = String(pin || '').trim();
   if (!/^\d{6}$/.test(cleanPin)) {
@@ -290,41 +406,79 @@ export function addResponse(dataDir, pin, payload, now = Date.now()) {
     return { status: 400, error: 'Informe seu nome ou apelido para registrar a resposta.' };
   }
 
+  const questions = getRoomQuestions(room);
+  const questionMap = new Map(questions.map((q, i) => [q.id, { ...q, index: i + 1 }]));
   const maxVal = room.scale === 9 ? 9 : 5;
-  const valence = Number(payload?.valence);
-  const arousal = Number(payload?.arousal);
-  const dominance = Number(payload?.dominance);
+  const submittedAt = new Date(now).toISOString();
+  const submissionId = crypto.randomUUID();
 
-  if (
-    !Number.isInteger(valence) || valence < 1 || valence > maxVal ||
-    !Number.isInteger(arousal) || arousal < 1 || arousal > maxVal ||
-    !Number.isInteger(dominance) || dominance < 1 || dominance > maxVal
-  ) {
-    return { status: 400, error: `Selecione uma opção válida (1 a ${maxVal}) em todas as 3 dimensões.` };
+  // Support both multi-question { answers: [...] } and legacy single { valence, arousal, dominance }
+  const rawAnswers = Array.isArray(payload?.answers)
+    ? payload.answers
+    : [
+        {
+          questionId: payload?.questionId || questions[0].id,
+          valence: payload?.valence,
+          arousal: payload?.arousal,
+          dominance: payload?.dominance,
+          comment: payload?.comment,
+        },
+      ];
+
+  if (rawAnswers.length === 0) {
+    return { status: 400, error: 'Envie ao menos uma resposta válida.' };
   }
 
-  const comment = room.allowComments && typeof payload?.comment === 'string'
-    ? payload.comment.trim().slice(0, 1000)
-    : '';
+  const entries = [];
+  for (const item of rawAnswers) {
+    const targetQId = typeof item?.questionId === 'string' ? item.questionId.trim() : questions[0].id;
+    const matchedQ = questionMap.get(targetQId);
+    if (!matchedQ) {
+      return { status: 400, error: 'Questão não encontrada nesta sala.' };
+    }
+    const valence = Number(item?.valence);
+    const arousal = Number(item?.arousal);
+    const dominance = Number(item?.dominance);
+    if (
+      !Number.isInteger(valence) || valence < 1 || valence > maxVal ||
+      !Number.isInteger(arousal) || arousal < 1 || arousal > maxVal ||
+      !Number.isInteger(dominance) || dominance < 1 || dominance > maxVal
+    ) {
+      return {
+        status: 400,
+        error: `Selecione uma opção válida (1 a ${maxVal}) em todas as 3 dimensões da Questão ${matchedQ.index}.`,
+      };
+    }
 
-  const entry = {
-    id: crypto.randomUUID(),
-    participantName: participantName.slice(0, 80),
-    valence,
-    arousal,
-    dominance,
-    comment,
-    submittedAt: new Date(now).toISOString(),
-  };
+    const comment =
+      room.allowComments && typeof item?.comment === 'string'
+        ? item.comment.trim().slice(0, 1000)
+        : '';
+
+    entries.push({
+      id: crypto.randomUUID(),
+      submissionId,
+      questionId: matchedQ.id,
+      questionIndex: matchedQ.index,
+      questionPrompt: matchedQ.prompt,
+      participantName: participantName.slice(0, 80),
+      valence,
+      arousal,
+      dominance,
+      comment,
+      submittedAt,
+    });
+  }
 
   room.responses = Array.isArray(room.responses) ? room.responses : [];
-  room.responses.push(entry);
+  room.responses.push(...entries);
   rooms[idx] = room;
   writeRooms(dataDir, rooms, now);
 
   return {
     status: 201,
-    response: entry,
+    response: entries[0],
+    responses: entries,
     responseCount: room.responses.length,
   };
 }

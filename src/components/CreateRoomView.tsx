@@ -1,10 +1,11 @@
 import React, { useRef, useState } from 'react';
-import { ArrowLeft, CheckCircle2, FileUp, Info, ShieldAlert, Upload } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, FileUp, Info, Plus, ShieldAlert, Trash2, Upload } from 'lucide-react';
 import { formatCpfMask, onlyDigits, validateCpf } from '../utils/cpf';
 import {
   parseImportedRoomJson,
   type ContextType,
   type RoomAdmin,
+  type RoomQuestion,
   type RoomResponse,
   type ScaleType,
 } from '../utils/emotiSam';
@@ -19,7 +20,9 @@ export const CreateRoomView: React.FC<CreateRoomViewProps> = ({ onBack, onRoomCr
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [title, setTitle] = useState('');
-  const [question, setQuestion] = useState('Como você se sentiu durante esta experiência?');
+  const [questions, setQuestions] = useState<RoomQuestion[]>([
+    { id: 'q1', prompt: 'Como você se sentiu durante esta experiência?' },
+  ]);
   const [contextType, setContextType] = useState<ContextType>('system');
   const [scale, setScale] = useState<ScaleType>(5);
   const [allowComments, setAllowComments] = useState(true);
@@ -40,6 +43,28 @@ export const CreateRoomView: React.FC<CreateRoomViewProps> = ({ onBack, onRoomCr
   const cpfIsValid = cpfDigits.length === 11 && validateCpf(cpf);
   const cpfHasError = cpfDigits.length === 11 && !cpfIsValid;
 
+  const handleAddQuestion = () => {
+    if (questions.length >= 30) return;
+    const nextNum = questions.length + 1;
+    const used = new Set(questions.map((q) => q.id));
+    let id = `q${nextNum}`;
+    let counter = nextNum;
+    while (used.has(id)) {
+      counter += 1;
+      id = `q${counter}`;
+    }
+    setQuestions((prev) => [...prev, { id, prompt: '' }]);
+  };
+
+  const handleQuestionChange = (index: number, prompt: string) => {
+    setQuestions((prev) => prev.map((q, i) => (i === index ? { ...q, prompt } : q)));
+  };
+
+  const handleRemoveQuestion = (index: number) => {
+    if (questions.length <= 1) return;
+    setQuestions((prev) => prev.filter((_, i) => i !== index));
+  };
+
   const handleJsonFile = async (file: File | undefined) => {
     setImportError('');
     if (!file) return;
@@ -47,7 +72,11 @@ export const CreateRoomView: React.FC<CreateRoomViewProps> = ({ onBack, onRoomCr
       const text = await file.text();
       const parsed = parseImportedRoomJson(text);
       setTitle(parsed.title);
-      setQuestion(parsed.question);
+      setQuestions(
+        parsed.questions.length > 0
+          ? parsed.questions
+          : [{ id: 'q1', prompt: parsed.question }]
+      );
       setContextType(parsed.contextType);
       setScale(parsed.scale);
       setAllowComments(parsed.allowComments);
@@ -81,10 +110,19 @@ export const CreateRoomView: React.FC<CreateRoomViewProps> = ({ onBack, onRoomCr
       setError('Informe um título para a sala com pelo menos 3 caracteres.');
       return;
     }
-    if (question.trim().length < 5) {
-      setError('Informe a pergunta norteadora com pelo menos 5 caracteres.');
+
+    const cleanedQuestions = questions.map((q) => ({
+      id: q.id,
+      prompt: q.prompt.trim(),
+    }));
+    const invalidIdx = cleanedQuestions.findIndex((q) => q.prompt.length < 5);
+    if (invalidIdx !== -1) {
+      setError(
+        `A Questão ${invalidIdx + 1} deve ter pelo menos 5 caracteres.`
+      );
       return;
     }
+
     if (!cpfIsValid) {
       setError('Informe um CPF válido (11 dígitos com dígitos verificadores corretos).');
       return;
@@ -97,7 +135,8 @@ export const CreateRoomView: React.FC<CreateRoomViewProps> = ({ onBack, onRoomCr
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           title: title.trim(),
-          question: question.trim(),
+          question: cleanedQuestions[0].prompt,
+          questions: cleanedQuestions,
           contextType,
           scale,
           allowComments,
@@ -264,19 +303,67 @@ export const CreateRoomView: React.FC<CreateRoomViewProps> = ({ onBack, onRoomCr
             />
           </div>
 
-          <div>
-            <label htmlFor="room-question" className="block text-sm font-semibold text-slate-900 mb-1.5">
-              Pergunta Norteadora para o Participante *
-            </label>
-            <input
-              id="room-question"
-              type="text"
-              maxLength={280}
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              placeholder="Ex.: Como você se sentiu enquanto usava o sistema?"
-              className="w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-600/20"
-            />
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <span className="block text-sm font-semibold text-slate-900">
+                  Perguntas da Avaliação ({questions.length}) *
+                </span>
+                <span className="block text-xs text-slate-500">
+                  Cada questão será avaliada pelo participante nas 3 dimensões emoti-SAM (Valência, Excitação e Dominância).
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={handleAddQuestion}
+                disabled={questions.length >= 30}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50/70 px-3 py-1.5 text-xs font-semibold text-blue-800 hover:bg-blue-100 transition-colors cursor-pointer disabled:opacity-50 whitespace-nowrap"
+              >
+                <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Adicionar pergunta</span>
+              </button>
+            </div>
+
+            <div className="space-y-2.5">
+              {questions.map((q, idx) => (
+                <div key={q.id} className="flex items-start gap-2">
+                  <div className="flex-1">
+                    <label htmlFor={`room-question-${idx}`} className="sr-only">
+                      Pergunta da Questão {idx + 1}
+                    </label>
+                    <div className="relative flex items-center">
+                      <span className="absolute left-3 text-xs font-mono font-bold text-slate-400 select-none">
+                        Q{idx + 1}
+                      </span>
+                      <input
+                        id={`room-question-${idx}`}
+                        type="text"
+                        maxLength={280}
+                        value={q.prompt}
+                        onChange={(e) => handleQuestionChange(idx, e.target.value)}
+                        placeholder={
+                          idx === 0
+                            ? 'Ex.: Como você se sentiu na tela inicial do sistema?'
+                            : `Ex.: Como você se sentiu na etapa ${idx + 1}?`
+                        }
+                        className="w-full rounded-lg border border-slate-300 bg-white pl-10 pr-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-600/20"
+                      />
+                    </div>
+                  </div>
+                  {questions.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveQuestion(idx)}
+                      aria-label={`Remover Questão ${idx + 1}`}
+                      title={`Remover Questão ${idx + 1}`}
+                      className="mt-1 rounded-lg border border-slate-200 bg-white p-2.5 text-slate-500 hover:border-red-200 hover:bg-red-50 hover:text-red-700 transition-colors cursor-pointer shrink-0"
+                    >
+                      <Trash2 className="w-4 h-4" aria-hidden="true" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         </div>
 

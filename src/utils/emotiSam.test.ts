@@ -14,6 +14,10 @@ const sampleRoom: RoomAdmin = {
   pin: '482910',
   title: 'Oficina de Scratch - Escola A',
   question: 'Como você se sentiu durante a oficina?',
+  questions: [
+    { id: 'q1', prompt: 'Como você se sentiu durante a oficina?' },
+    { id: 'q2', prompt: 'Como você se sentiu ao apresentar seu projeto?' },
+  ],
   contextType: 'extension',
   scale: 5,
   allowComments: true,
@@ -22,6 +26,9 @@ const sampleRoom: RoomAdmin = {
   responses: [
     {
       id: 'resp-1',
+      questionId: 'q1',
+      questionIndex: 1,
+      questionPrompt: 'Como você se sentiu durante a oficina?',
       participantName: 'Maria; Clara',
       valence: 5,
       arousal: 4,
@@ -31,6 +38,9 @@ const sampleRoom: RoomAdmin = {
     },
     {
       id: 'resp-2',
+      questionId: 'q2',
+      questionIndex: 2,
+      questionPrompt: 'Como você se sentiu ao apresentar seu projeto?',
       participantName: 'João',
       valence: 3,
       arousal: 2,
@@ -59,18 +69,25 @@ test('computeDimensionStats calculates mean and ordered distribution', () => {
   assert.equal(stats.distribution[4].percent, 50);
 });
 
-test('buildRoomCsv produces UTF-8 BOM with semicolon separator and proper escaping', () => {
+test('buildRoomCsv produces UTF-8 BOM with semicolon separator, question columns, and proper escaping', () => {
   const csv = buildRoomCsv(sampleRoom);
   assert.equal(csv.startsWith('\uFEFF'), true);
   const lines = csv.slice(1).split('\r\n');
   assert.equal(
     lines[0],
-    'PIN_Sala;Titulo_Sala;Contexto_Tipo;Escala;ID_Resposta;Nome_Participante;Data_Hora_ISO;Valencia;Excitacao;Dominancia;Comentario_Opcional'
+    'PIN_Sala;Titulo_Sala;Contexto_Tipo;Escala;Numero_Questao;Questao;ID_Resposta;Nome_Participante;Data_Hora_ISO;Valencia;Excitacao;Dominancia;Comentario_Opcional'
   );
-  assert.match(lines[1], /^482910;Oficina de Scratch - Escola A;Ação de Extensão \/ Educacional;5 pontos;resp-1;"Maria; Clara";2026-11-17T10:00:00\.000Z;5;4;5;"Gostei ""muito"" da aula!"$/);
+  assert.match(
+    lines[1],
+    /^482910;Oficina de Scratch - Escola A;Ação de Extensão \/ Educacional;5 pontos;1;Como você se sentiu durante a oficina\?;resp-1;"Maria; Clara";2026-11-17T10:00:00\.000Z;5;4;5;"Gostei ""muito"" da aula!"$/
+  );
+  assert.match(
+    lines[2],
+    /^482910;Oficina de Scratch - Escola A;Ação de Extensão \/ Educacional;5 pontos;2;Como você se sentiu ao apresentar seu projeto\?;resp-2;João;2026-11-17T10:05:00\.000Z;3;2;4;$/
+  );
 });
 
-test('buildRoomExportJson and parseImportedRoomJson round-trip safely without cpfHash', () => {
+test('buildRoomExportJson and parseImportedRoomJson round-trip multiple questions without cpfHash', () => {
   const exported = buildRoomExportJson(sampleRoom);
   const raw = JSON.stringify(exported);
   assert.equal(raw.includes('cpfHash'), false);
@@ -80,7 +97,26 @@ test('buildRoomExportJson and parseImportedRoomJson round-trip safely without cp
   assert.equal(parsed.title, 'Oficina de Scratch - Escola A');
   assert.equal(parsed.contextType, 'extension');
   assert.equal(parsed.scale, 5);
+  assert.equal(parsed.questions.length, 2);
+  assert.equal(parsed.questions[1].prompt, 'Como você se sentiu ao apresentar seu projeto?');
   assert.equal(parsed.responses.length, 2);
+});
+
+test('parseImportedRoomJson supports legacy single-question v1.0 payloads', () => {
+  const legacyRaw = JSON.stringify({
+    schemaVersion: '1.0',
+    pin: '123456',
+    title: 'Sala Legada',
+    question: 'Como foi a experiência?',
+    contextType: 'system',
+    scale: 9,
+    allowComments: true,
+    responses: [],
+  });
+  const parsed = parseImportedRoomJson(legacyRaw);
+  assert.equal(parsed.questions.length, 1);
+  assert.equal(parsed.questions[0].id, 'q1');
+  assert.equal(parsed.questions[0].prompt, 'Como foi a experiência?');
 });
 
 test('formatRemainingRetention formats days and hours cleanly', () => {

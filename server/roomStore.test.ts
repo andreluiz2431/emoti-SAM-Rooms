@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   RETENTION_MS,
+  addQuestionToRoom,
   addResponse,
   authenticateAdmin,
   cleanupExpiredRooms,
@@ -192,6 +193,83 @@ test('import/clone room supports keeping responses and optional original PIN', (
       now + 1000
     );
     assert.equal(duplicate.status, 409);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('multi-question rooms: create with multiple questions, add question live, and submit multi-question answers', () => {
+  const dir = createTempDir();
+  try {
+    const now = 1700000000000;
+    const validCpf = '529.982.247-25';
+    const created = createOrImportRoom(
+      dir,
+      {
+        title: 'Teste de Usabilidade Multi-Etapa',
+        questions: [
+          { id: 'q1', prompt: 'Como você se sentiu na tela de login?' },
+          { id: 'q2', prompt: 'Como você se sentiu ao gerar o relatório?' },
+        ],
+        contextType: 'system',
+        scale: 9,
+        allowComments: true,
+        cpf: validCpf,
+      },
+      now
+    );
+
+    assert.equal(created.status, 201);
+    assert.ok(created.room);
+    const pin = created.room.pin;
+    assert.equal(created.room.questions.length, 2);
+
+    // Creator adds a 3rd question to the active room
+    const addedBadCpf = addQuestionToRoom(
+      dir,
+      pin,
+      { cpf: '111.444.777-35', prompt: 'Como foi o checkout?' },
+      now + 500
+    );
+    assert.equal(addedBadCpf.status, 403);
+
+    const added = addQuestionToRoom(
+      dir,
+      pin,
+      { cpf: validCpf, prompt: 'Como você se sentiu ao finalizar a tarefa?' },
+      now + 1000
+    );
+    assert.equal(added.status, 201);
+    assert.ok(added.room);
+    assert.equal(added.room.questions.length, 3);
+    assert.equal(added.room.questions[2].id, 'q3');
+
+    // Public room exposes all 3 questions
+    const pub = getPublicRoom(dir, pin, now + 1500);
+    assert.equal(pub.status, 200);
+    assert.ok(pub.room);
+    assert.equal(pub.room.questions.length, 3);
+
+    // Participant submits answers for all 3 questions
+    const resp = addResponse(
+      dir,
+      pin,
+      {
+        participantName: 'Carla',
+        answers: [
+          { questionId: 'q1', valence: 7, arousal: 6, dominance: 8, comment: 'Rápido' },
+          { questionId: 'q2', valence: 4, arousal: 7, dominance: 3, comment: 'Filtro confuso' },
+          { questionId: 'q3', valence: 9, arousal: 8, dominance: 9, comment: '' },
+        ],
+      },
+      now + 2000
+    );
+    assert.equal(resp.status, 201);
+    assert.equal(resp.responseCount, 3);
+    assert.ok(resp.responses);
+    assert.equal(resp.responses.length, 3);
+    assert.equal(resp.responses[1].questionIndex, 2);
+    assert.equal(resp.responses[1].questionPrompt, 'Como você se sentiu ao gerar o relatório?');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
