@@ -329,29 +329,21 @@ export const EmotiSamFace: React.FC<EmotiSamFaceProps> = ({
     );
   }
 
-  // anchorLevel === 1: Disappointed / frustrated face (with difficulty cone hat in 9-point version as in FormularioPapel_v2)
+  // anchorLevel === 1: Disappointed / frustrated face (consistent across 3, 5, and 9-point scales — no hat)
   return (
-    <svg viewBox="0 0 116 92" className={className} role="img" aria-label={title || 'Dominância mínima: desapontado e sem controle'}>
+    <svg viewBox="0 0 116 92" className={className} role="img" aria-label={title || 'Dominância mínima: sem controle ou frustrado'}>
       <g stroke={INK} strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round">
-        {scaleVariant === 9 && (
-          <g>
-            {/* Side flaps/ears & conical difficulty hat from FormularioPapel_v2 */}
-            <path d="M36 42 L29 15 L47 31 Z" fill="#9CA3AF" />
-            <path d="M80 42 L87 15 L69 31 Z" fill="#9CA3AF" />
-            <path d="M43 32 L58 7 L73 32 Q58 37 43 32 Z" fill="#E5E7EB" />
-          </g>
-        )}
-        <circle cx="58" cy="54" r="27" fill={YELLOW} />
+        <circle cx="58" cy="50" r="28" fill={YELLOW} />
         {/* Worried drooping eyebrows */}
-        <path d="M41 44 Q47 42 52 38" fill="none" strokeWidth="2.8" />
-        <path d="M75 44 Q69 42 64 38" fill="none" strokeWidth="2.8" />
+        <path d="M40 40 Q46 38 51 34" fill="none" strokeWidth="2.8" />
+        <path d="M76 40 Q70 38 65 34" fill="none" strokeWidth="2.8" />
         {/* Sad eyes */}
-        <path d="M41 50 Q47 54 53 50" fill="none" strokeWidth="2.8" />
-        <path d="M63 50 Q69 54 75 50" fill="none" strokeWidth="2.8" />
-        <circle cx="47" cy="48" r="1.8" fill={INK} stroke="none" />
-        <circle cx="69" cy="48" r="1.8" fill={INK} stroke="none" />
+        <path d="M40 46 Q46 50 52 46" fill="none" strokeWidth="2.8" />
+        <path d="M64 46 Q70 50 76 46" fill="none" strokeWidth="2.8" />
+        <circle cx="46" cy="44" r="1.8" fill={INK} stroke="none" />
+        <circle cx="70" cy="44" r="1.8" fill={INK} stroke="none" />
         {/* Disappointed downturned mouth */}
-        <path d="M46 67 C51 60, 65 60, 70 67" fill="none" />
+        <path d="M45 64 C51 56, 65 56, 71 64" fill="none" />
       </g>
     </svg>
   );

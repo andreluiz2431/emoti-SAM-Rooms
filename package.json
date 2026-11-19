@@ -1,7 +1,7 @@
 {
-  "name": "emoti-sam-rooms",
+  "name": "e-sam",
   "private": true,
-  "version": "1.0.0",
+  "version": "2.0.0",
   "type": "module",
   "scripts": {
     "dev": "NODE_ENV=development node server.js",
@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
-    "test": "tsx --test src/utils/cpf.test.ts src/utils/emotiSam.test.ts server/roomStore.test.ts"
+    "test": "tsx --test server/otpService.test.ts server/roomStore.test.ts src/utils/emotiSam.test.ts src/utils/statistics.test.ts"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",

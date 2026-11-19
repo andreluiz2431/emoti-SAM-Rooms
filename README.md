@@ -1,33 +1,39 @@
-# emoti-SAM Rooms
+# e-SAM (electronic SAM)
 
-Aplicação web interativa inspirada na dinâmica de salas do **Kahoot** e fundamentada no instrumento científico **emoti-SAM** (Hayashi et al., 2016 — *Self-Assessment Manikin* adaptado com emoticons/emojis para as dimensões do modelo PAD: **Valência**, **Excitação** e **Dominância**).
+Aplicação web interativa inspirada na dinâmica de salas do **Kahoot** e fundamentada nos instrumentos científicos **emoti-SAM** (Hayashi et al., 2016) e **SAM Original** (Bradley & Lang, 1994) para avaliação da experiência afetiva nas 3 dimensões do modelo PAD: **Valência**, **Excitação** e **Dominância**.
 
-Projetada para avaliar a experiência afetiva tanto em **sistemas computacionais** (usabilidade e IHC) quanto em **ações de extensão universitária e atividades educacionais**, sem exigir criação de conta ou login dos participantes.
+Projetada para medir a resposta afetiva no uso de **sistemas computacionais** (usabilidade e IHC) ou participação em **ações de extensão universitária e atividades educacionais**, com participação anônima por padrão e sem exigir conta ou login dos respondentes.
 
 ---
 
 ## Principais Funcionalidades
 
-- **Instrumento emoti-SAM Fiel em SVG:** 15 ilustrações SVG coloridas estilo desenhado à mão com contorno preto espesso e preenchimento amarelo vibrante para as 3 dimensões (**Valência/Prazer**, **Excitação/Alerta** e **Dominância/Controle**).
-- **Duas Escalas Configuráveis:**
-  - **5 pontos:** Seleção direta entre as 5 figuras (ideal para ações de extensão, oficinas e público infantil/geral).
-  - **9 pontos:** 5 figuras principais alinhadas a 9 botões de rádio (`9` a `1`), permitindo marcações intermediárias (ideal para avaliações detalhadas de sistemas computacionais).
-- **Dinâmica de Sala via PIN & QR Code:** Entrada imediata com PIN de 6 dígitos + Nome/Apelido, suporte a link direto (`/?pin=123456`) e **Modo Telão** para projeção em sala de aula.
-- **Certificação do Criador via CPF (LGPD):** Máscara automática (`000.000.000-00`) e validação matemática dos dois dígitos verificadores. O CPF nunca é salvo em texto puro — o servidor armazena apenas o hash irreversível **SHA-256** (`cpfHash`).
-- **Armazenamento Interno com Retenção Máxima de 30 Dias:** Persistência em arquivo JSON estruturado (`rooms.json`) sem banco de dados externo, com limpeza automática após 30 dias e contador regressivo em tempo real no painel.
-- **Exportação e Importação/Clonagem:**
-  - **CSV (Excel PT-BR):** UTF-8 com BOM (`\uFEFF`) e separador `;`.
-  - **JSON Completo:** Exporta configurações, metadados e respostas (omitindo `cpfHash`) para backup ou clonagem.
-  - **Importação de Sala (`.json`):** Preenche automaticamente o formulário de criação com opções para manter ou limpar respostas existentes e manter ou renovar o PIN.
+- **Dois Instrumentos Pictóricos em SVG (Puramente Pictóricos para o Respondente):**
+  - **e-SAM (emoti-SAM):** 15 ilustrações expressivas coloridas para Valência, Excitação e Dominância.
+  - **SAM Original (Lang & Bradley):** 15 ilustrações clássicas em manequim (expressões faciais, explosão abdominal e variação de tamanho corporal).
+  - Na tela do respondente, nenhuma legenda textual visível aparece abaixo das figuras; todas as descrições são mantidas em `alt` e `aria-label` para leitores de tela.
+- **Três Escalas Padronizadas (`3`, `5` ou `9` pontos):**
+  - Pontuação sempre padronizada: `1` = menor/mais negativo e nota máxima (`3`, `5` ou `9`) = maior/mais positivo.
+  - Personalização por dimensão: exibir/ocultar títulos, editar textos/descrições `alt`, inverter ordem visual (`Positivo → Negativo` ou `Negativo → Positivo`) e substituir imagens opcionalmente com pré-visualização completa em tempo real.
+- **Autenticação do Criador via E-mail + Código OTP (6 dígitos):**
+  - Fluxo gratuito em 2 etapas via API HTTP (`EMAIL_PROVIDER=resend` ou `brevo`, com validade de 10 minutos e fallback em console quando `EMAIL_API_KEY` não está configurada em desenvolvimento).
+  - O servidor armazena apenas o hash irreversível **SHA-256** do e-mail.
+- **Anonimato por Padrão e `ID_Usuario` Único:**
+  - Respondentes entram diretamente apenas com o PIN de 6 dígitos (o campo de nome só aparece se o criador marcar *"Exigir identificação do respondente"*).
+  - Cada submissão recebe um `ID_Usuario` único (`USR-<timestamp>-<hex>`) exibido na tabela e incluído em CSV/JSON, diferenciando até mesmo homônimos.
+- **Bloqueio de Integridade Metodológica:**
+  - Configurações do instrumento podem ser editadas enquanto a sala tem 0 respostas e são bloqueadas permanentemente assim que a 1ª resposta é registrada.
+- **Visualizações Científicas (Hayashi et al., 2016):**
+  - **Barras Empilhadas Divergentes (Figura 9)** centralizadas no eixo neutro.
+  - **Boxplots por Dimensão (Figura 8)** com Q1, mediana, Q3, limites de Tukey, média e outliers.
+  - **Mapa Afetivo 2D (Affective Grid)** cruzando Valência × Excitação nos 4 quadrantes emocionais.
+- **Persistência em Volume (30 dias) e Exportação/Importação:**
+  - Armazenamento em `rooms.json` sem banco externo, com retenção automática de 30 dias.
+  - Exportação em **CSV PT-BR** (`e-sam-sala-<pin>.csv`, UTF-8 BOM + `;`) e **JSON Completo** (`e-sam-sala-<pin>-completo.json`), além de clonagem/importação de sala via `.json`.
 
 ---
 
 ## Executando Localmente
-
-### Pré-requisitos
-- **Node.js 20+**
-
-### Passos
 
 ```bash
 # 1. Instalar dependências
@@ -44,47 +50,19 @@ npm run build
 npm start
 ```
 
-Acesse `http://localhost:3000`.
+Acesse `http://localhost:3000`. Sem `EMAIL_API_KEY`, o código OTP de 6 dígitos é exibido no console do servidor e no aviso de ambiente de desenvolvimento.
 
 ---
 
-## Deploy no GitHub + Railway (com Volume Persistente)
+## Variáveis de Ambiente (Railway)
 
-A aplicação já inclui `railway.json` configurado para o builder **NIXPACKS**, comando de inicialização `npm start` e verificação de saúde em `GET /api/health`.
-
-### Passo 1: Subir o repositório para o GitHub
-
-```bash
-git init
-git add .
-git commit -m "feat: emoti-SAM Rooms pronto para produção"
-git branch -M main
-git remote add origin https://github.com/SEU-USUARIO/emoti-sam-rooms.git
-git push -u origin main
-```
-
-### Passo 2: Criar o projeto no Railway
-
-1. Acesse [railway.app](https://railway.app) e clique em **New Project** > **Deploy from GitHub repo**.
-2. Selecione o repositório `emoti-sam-rooms`.
-3. O Railway detectará automaticamente o `railway.json`, executará `npm run build` e iniciará o servidor com `npm start` (`NODE_ENV=production node server.js`).
-
-### Passo 3: Acoplar o Volume Persistente (`/data`) no Railway
-
-Como o armazenamento das salas é feito em arquivo (`rooms.json`) sem banco de dados externo, **é obrigatório acoplar um Volume no Railway** para que as salas não sejam perdidas a cada novo deploy ou reinício do container:
-
-1. No painel do seu serviço no Railway, pressione **`Ctrl+K`** (ou `Cmd+K` no Mac) para abrir a paleta de comandos.
-2. Selecione **`Add Volume`**.
-3. No campo **Mount Path**, informe exatamente:
-   ```
-   /data
-   ```
-4. Confirme e aguarde o redeploy automático.
-5. O Railway injetará automaticamente a variável `RAILWAY_VOLUME_MOUNT_PATH=/data`. Você pode confirmar que o volume está ativo acessando:
-   ```
-   https://seu-app.up.railway.app/api/health
-   ```
-   A resposta deve retornar `"persistentVolumeActive": true`.
+| Variável | Descrição |
+| --- | --- |
+| `PORT` | Porta HTTP (injetada automaticamente pelo Railway) |
+| `RAILWAY_VOLUME_MOUNT_PATH` | Monte um Volume em `/data` no Railway para persistir `rooms.json` |
+| `EMAIL_PROVIDER` | `resend` (padrão) ou `brevo` |
+| `EMAIL_API_KEY` | Chave de API gratuita do Resend ou Brevo para envio real dos códigos OTP |
+| `EMAIL_FROM` | Remetente (ex.: `e-SAM <onboarding@resend.dev>`) |
 
 ---
 

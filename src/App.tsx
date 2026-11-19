@@ -11,8 +11,8 @@ type ActiveView =
   | { name: 'home' }
   | { name: 'create' }
   | { name: 'manage-auth' }
-  | { name: 'evaluate'; room: RoomPublic; participantName: string }
-  | { name: 'admin-panel'; room: RoomAdmin; cpf: string };
+  | { name: 'evaluate'; room: RoomPublic }
+  | { name: 'admin-panel'; room: RoomAdmin; creatorToken: string };
 
 export default function App() {
   const [urlPin, setUrlPin] = useState('');
@@ -28,7 +28,7 @@ export default function App() {
     }
   }, []);
 
-  const handleJoinRoom = async (pin: string, participantName: string) => {
+  const handleJoinRoom = async (pin: string) => {
     const res = await fetch(`/api/rooms/${pin}`);
     const data = await res.json();
     if (!res.ok) {
@@ -37,7 +37,6 @@ export default function App() {
     setView({
       name: 'evaluate',
       room: data.room as RoomPublic,
-      participantName,
     });
   };
 
@@ -54,9 +53,11 @@ export default function App() {
           <button
             type="button"
             onClick={goHome}
-            className="text-lg font-display font-extrabold tracking-tight text-slate-900 whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 rounded"
+            title="e-SAM — electronic SAM"
+            className="text-lg font-display font-extrabold tracking-tight text-slate-900 whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 rounded flex items-baseline gap-1.5"
           >
-            emoti-SAM Rooms
+            <span>e-SAM</span>
+            <span className="hidden sm:inline text-xs font-medium text-slate-400">electronic SAM</span>
           </button>
 
           {/* Zone 2: Concise single-line navigation links */}
@@ -95,7 +96,7 @@ export default function App() {
               onClick={() => setInfoOpen(true)}
               className="hover:text-slate-900 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
-              Sobre o emoti-SAM
+              Sobre o e-SAM
             </button>
           </nav>
 
@@ -126,8 +127,8 @@ export default function App() {
         {view.name === 'create' && (
           <CreateRoomView
             onBack={goHome}
-            onRoomCreated={(room, cpf) =>
-              setView({ name: 'admin-panel', room, cpf })
+            onRoomCreated={(room, creatorToken) =>
+              setView({ name: 'admin-panel', room, creatorToken })
             }
           />
         )}
@@ -136,47 +137,33 @@ export default function App() {
           <AdminAuthView
             initialPin={urlPin}
             onBack={goHome}
-            onAuthenticated={(room, cpf) =>
-              setView({ name: 'admin-panel', room, cpf })
+            onAuthenticated={(room, creatorToken) =>
+              setView({ name: 'admin-panel', room, creatorToken })
             }
           />
         )}
 
         {view.name === 'evaluate' && (
-          <EvaluateView
-            room={view.room}
-            initialParticipantName={view.participantName}
-            onExitHome={goHome}
-          />
+          <EvaluateView room={view.room} onExitHome={goHome} />
         )}
 
         {view.name === 'admin-panel' && (
           <AdminPanelView
             initialRoom={view.room}
-            creatorCpf={view.cpf}
+            creatorToken={view.creatorToken}
             onExitHome={goHome}
             onRoomDeleted={goHome}
           />
         )}
       </main>
 
-      {/* Clean Quiet Footer */}
+      {/* Clean Quiet Footer (PAD link removed per specification) */}
       <footer className="border-t border-slate-200 bg-white">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-5 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-500 text-center sm:text-left">
           <span>
-            emoti-SAM Rooms · Fundamentado em Hayashi et al. (2016) e Lang &amp; Bradley (1994)
+            e-SAM (electronic SAM) · Fundamentado em Hayashi et al. (2016) e Lang &amp; Bradley (1994)
           </span>
-          <div className="flex flex-wrap items-center justify-center gap-3">
-            <button
-              type="button"
-              onClick={() => setInfoOpen(true)}
-              className="hover:text-slate-900 underline underline-offset-2 cursor-pointer whitespace-nowrap"
-            >
-              Conhecer as 3 dimensões PAD
-            </button>
-            <span aria-hidden="true">·</span>
-            <span className="whitespace-nowrap">Retenção máxima de 30 dias</span>
-          </div>
+          <span className="whitespace-nowrap">Retenção máxima de 30 dias</span>
         </div>
       </footer>
 

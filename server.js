@@ -2,17 +2,20 @@ import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createOtpService } from './server/otpService.js';
 import {
   RETENTION_DAYS,
   addQuestionToRoom,
   addResponse,
-  authenticateAdmin,
+  authenticateAdminSession,
   cleanupExpiredRooms,
   createOrImportRoom,
   deleteRoom,
   getPublicRoom,
   readRooms,
   resolveDataDir,
+  updateRoomConfig,
+  verifyRoomCreatorEmail,
 } from './server/roomStore.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -22,38 +25,82 @@ const PORT = Number(process.env.PORT) || 3000;
 const DATA_DIR = resolveDataDir();
 const IS_DEV = process.env.NODE_ENV === 'development';
 
+const otpService = createOtpService();
+
 // Ensure data directory exists on boot and purge any expired rooms
 fs.mkdirSync(DATA_DIR, { recursive: true });
 cleanupExpiredRooms(DATA_DIR);
 
-// Periodic cleanup every 60 minutes
+// Periodic cleanup every 60 minutes (rooms > 30 days & expired OTPs/sessions)
 const cleanupTimer = setInterval(() => {
   cleanupExpiredRooms(DATA_DIR);
+  otpService.cleanup();
 }, 60 * 60 * 1000);
 cleanupTimer.unref();
 
 const app = express();
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '5mb' }));
+
+function extractCreatorSession(req) {
+  const authHeader = req.headers.authorization || '';
+  const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+  const token = bearerToken || req.body?.token || req.headers['x-creator-token'] || '';
+  return otpService.resolveSession(token);
+}
 
 // Healthcheck endpoint for Railway & monitoring
 app.get('/api/health', (_req, res) => {
   const rooms = readRooms(DATA_DIR);
   res.status(200).json({
     status: 'ok',
-    service: 'emoti-sam-rooms',
+    service: 'e-sam',
     persistentVolumeActive: Boolean(
       process.env.RAILWAY_VOLUME_MOUNT_PATH && process.env.RAILWAY_VOLUME_MOUNT_PATH.trim() !== ''
     ),
     dataDir: process.env.RAILWAY_VOLUME_MOUNT_PATH ? 'railway-volume' : 'local-data',
+    emailConfigured: Boolean(process.env.EMAIL_API_KEY && process.env.EMAIL_API_KEY.trim() !== ''),
     retentionDays: RETENTION_DAYS,
     activeRooms: rooms.length,
     timestamp: new Date().toISOString(),
   });
 });
 
-// Create or import/clone a room
+// Step 1 of Email OTP Auth: request 6-digit verification code
+app.post('/api/auth/request-otp', async (req, res) => {
+  const { email, purpose, pin } = req.body || {};
+
+  if (purpose === 'admin') {
+    const check = verifyRoomCreatorEmail(DATA_DIR, pin, email);
+    if (check.error) {
+      return res.status(check.status).json({ error: check.error });
+    }
+  }
+
+  const result = await otpService.requestOtp(email);
+  if (result.error) {
+    return res.status(result.status).json({ error: result.error });
+  }
+  return res.status(200).json(result);
+});
+
+// Step 2 of Email OTP Auth: verify 6-digit code and obtain creator session token
+app.post('/api/auth/verify-otp', (req, res) => {
+  const { email, code } = req.body || {};
+  const result = otpService.verifyOtp(email, code);
+  if (result.error) {
+    return res.status(result.status).json({ error: result.error });
+  }
+  return res.status(200).json({
+    verified: true,
+    token: result.token,
+    email: result.email,
+  });
+});
+
+// Create or import/clone a room (authenticated via verified email session token)
 app.post('/api/rooms', (req, res) => {
-  const result = createOrImportRoom(DATA_DIR, req.body);
+  const session = extractCreatorSession(req);
+  const result = createOrImportRoom(DATA_DIR, req.body, session);
   if (result.error) {
     return res.status(result.status).json({ error: result.error });
   }
@@ -69,22 +116,58 @@ app.get('/api/rooms/:pin', (req, res) => {
   return res.status(result.status).json({ room: result.room });
 });
 
-// Submit participant emoti-SAM response (single or multi-question)
+// Submit participant evaluation response (single or multi-question)
 app.post('/api/rooms/:pin/respond', (req, res) => {
   const result = addResponse(DATA_DIR, req.params.pin, req.body);
   if (result.error) {
     return res.status(result.status).json({ error: result.error });
   }
   return res.status(result.status).json({
+    userId: result.userId,
     response: result.response,
     responses: result.responses,
     responseCount: result.responseCount,
   });
 });
 
-// Add a new question to an existing room (authenticated via creator CPF)
+// Authenticate creator (via session token OR email + otpCode) and return full room results
+app.post('/api/rooms/:pin/admin', (req, res) => {
+  let session = extractCreatorSession(req);
+  let issuedToken;
+
+  if (!session && req.body?.email && req.body?.code) {
+    const verified = otpService.verifyOtp(req.body.email, req.body.code);
+    if (verified.error) {
+      return res.status(verified.status).json({ error: verified.error });
+    }
+    session = { email: verified.email, emailHash: verified.emailHash };
+    issuedToken = verified.token;
+  }
+
+  const result = authenticateAdminSession(DATA_DIR, req.params.pin, session);
+  if (result.error) {
+    return res.status(result.status).json({ error: result.error });
+  }
+  return res.status(result.status).json({
+    room: result.room,
+    ...(issuedToken ? { token: issuedToken } : {}),
+  });
+});
+
+// Update room instrument configuration (locked after first response)
+app.put('/api/rooms/:pin/config', (req, res) => {
+  const session = extractCreatorSession(req);
+  const result = updateRoomConfig(DATA_DIR, req.params.pin, req.body, session);
+  if (result.error) {
+    return res.status(result.status).json({ error: result.error });
+  }
+  return res.status(result.status).json({ room: result.room });
+});
+
+// Add a new question to an existing room (authenticated via creator session)
 app.post('/api/rooms/:pin/questions', (req, res) => {
-  const result = addQuestionToRoom(DATA_DIR, req.params.pin, req.body);
+  const session = extractCreatorSession(req);
+  const result = addQuestionToRoom(DATA_DIR, req.params.pin, req.body, session);
   if (result.error) {
     return res.status(result.status).json({ error: result.error });
   }
@@ -94,19 +177,10 @@ app.post('/api/rooms/:pin/questions', (req, res) => {
   });
 });
 
-// Authenticate creator via PIN + CPF and return full room results
-app.post('/api/rooms/:pin/admin', (req, res) => {
-  const result = authenticateAdmin(DATA_DIR, req.params.pin, req.body?.cpf);
-  if (result.error) {
-    return res.status(result.status).json({ error: result.error });
-  }
-  return res.status(result.status).json({ room: result.room });
-});
-
-// Delete room early (authenticated via creator CPF)
+// Delete room early (authenticated via creator session)
 app.delete('/api/rooms/:pin', (req, res) => {
-  const cpf = req.body?.cpf || req.headers['x-creator-cpf'];
-  const result = deleteRoom(DATA_DIR, req.params.pin, cpf);
+  const session = extractCreatorSession(req);
+  const result = deleteRoom(DATA_DIR, req.params.pin, session);
   if (result.error) {
     return res.status(result.status).json({ error: result.error });
   }
@@ -130,7 +204,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[emoti-SAM Rooms] Servidor ativo na porta ${PORT} (${IS_DEV ? 'dev' : 'prod'})`);
+    console.log(`[e-SAM] Servidor ativo na porta ${PORT} (${IS_DEV ? 'dev' : 'prod'})`);
   });
 }
 

@@ -1,20 +1,32 @@
 import React, { useRef, useState } from 'react';
-import { ArrowLeft, CheckCircle2, FileUp, Info, Plus, ShieldAlert, Trash2, Upload } from 'lucide-react';
-import { formatCpfMask, onlyDigits, validateCpf } from '../utils/cpf';
 import {
+  ArrowLeft,
+  CheckCircle2,
+  FileUp,
+  Info,
+  Mail,
+  Plus,
+  Send,
+  Trash2,
+  Upload,
+} from 'lucide-react';
+import {
+  createDefaultInstrumentConfig,
   parseImportedRoomJson,
   type ContextType,
+  type InstrumentConfig,
   type RoomAdmin,
   type RoomQuestion,
   type RoomResponse,
-  type ScaleType,
 } from '../utils/emotiSam';
-import { EmotiSamFace } from './EmotiSamFaces';
+import { InstrumentConfigurator } from './InstrumentConfigurator';
 
 interface CreateRoomViewProps {
   onBack: () => void;
-  onRoomCreated: (room: RoomAdmin, rawCpf: string) => void;
+  onRoomCreated: (room: RoomAdmin, creatorToken: string) => void;
 }
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
 export const CreateRoomView: React.FC<CreateRoomViewProps> = ({ onBack, onRoomCreated }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -24,9 +36,23 @@ export const CreateRoomView: React.FC<CreateRoomViewProps> = ({ onBack, onRoomCr
     { id: 'q1', prompt: 'Como você se sentiu durante esta experiência?' },
   ]);
   const [contextType, setContextType] = useState<ContextType>('system');
-  const [scale, setScale] = useState<ScaleType>(5);
+  const [instrumentConfig, setInstrumentConfig] = useState<InstrumentConfig>(() =>
+    createDefaultInstrumentConfig('e-sam', 5)
+  );
+  const [requireParticipantName, setRequireParticipantName] = useState(false);
   const [allowComments, setAllowComments] = useState(true);
-  const [cpf, setCpf] = useState('');
+
+  // Email + 6-digit OTP state
+  const [email, setEmail] = useState('');
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpCode, setOtpCode] = useState('');
+  const [otpSending, setOtpSending] = useState(false);
+  const [otpVerifying, setOtpVerifying] = useState(false);
+  const [otpError, setOtpError] = useState('');
+  const [otpInfo, setOtpInfo] = useState('');
+  const [devCodeHint, setDevCodeHint] = useState('');
+  const [creatorToken, setCreatorToken] = useState('');
+  const [verifiedEmail, setVerifiedEmail] = useState('');
 
   // JSON Import state
   const [importedFileName, setImportedFileName] = useState('');
@@ -39,9 +65,18 @@ export const CreateRoomView: React.FC<CreateRoomViewProps> = ({ onBack, onRoomCr
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
 
-  const cpfDigits = onlyDigits(cpf);
-  const cpfIsValid = cpfDigits.length === 11 && validateCpf(cpf);
-  const cpfHasError = cpfDigits.length === 11 && !cpfIsValid;
+  const normalizedEmail = email.trim().toLowerCase();
+  const isEmailValid = EMAIL_PATTERN.test(normalizedEmail);
+  const isEmailVerified = Boolean(creatorToken && verifiedEmail === normalizedEmail);
+
+  const handleEmailChange = (value: string) => {
+    setEmail(value);
+    if (value.trim().toLowerCase() !== verifiedEmail) {
+      setCreatorToken('');
+      setVerifiedEmail('');
+    }
+    setOtpError('');
+  };
 
   const handleAddQuestion = () => {
     if (questions.length >= 30) return;
@@ -78,7 +113,8 @@ export const CreateRoomView: React.FC<CreateRoomViewProps> = ({ onBack, onRoomCr
           : [{ id: 'q1', prompt: parsed.question }]
       );
       setContextType(parsed.contextType);
-      setScale(parsed.scale);
+      setInstrumentConfig(parsed.instrumentConfig);
+      setRequireParticipantName(parsed.requireParticipantName);
       setAllowComments(parsed.allowComments);
       setImportedFileName(file.name);
       setImportedOriginalPin(parsed.pin);
@@ -102,6 +138,73 @@ export const CreateRoomView: React.FC<CreateRoomViewProps> = ({ onBack, onRoomCr
     }
   };
 
+  const handleRequestOtp = async () => {
+    setOtpError('');
+    setOtpInfo('');
+    setDevCodeHint('');
+    if (!isEmailValid) {
+      setOtpError('Informe um endereço de e-mail válido.');
+      return;
+    }
+
+    setOtpSending(true);
+    try {
+      const res = await fetch('/api/auth/request-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: normalizedEmail, purpose: 'create' }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || 'Não foi possível enviar o código de verificação.');
+      }
+      setOtpSent(true);
+      setOtpCode('');
+      if (data.deliveryMode === 'dev-fallback' && data.devCode) {
+        setDevCodeHint(String(data.devCode));
+        setOtpInfo('Ambiente de teste sem EMAIL_API_KEY configurada: código gerado no servidor e exibido abaixo.');
+      } else {
+        setOtpInfo(`Código de 6 dígitos enviado para ${normalizedEmail}. Válido por 10 minutos.`);
+      }
+    } catch (err) {
+      setOtpError(err instanceof Error ? err.message : 'Erro ao enviar código.');
+    } finally {
+      setOtpSending(false);
+    }
+  };
+
+  const verifyOtpCode = async (): Promise<string | null> => {
+    setOtpError('');
+    const cleanCode = otpCode.replace(/\D/g, '');
+    if (cleanCode.length !== 6) {
+      setOtpError('Digite o código numérico de 6 dígitos enviado ao seu e-mail.');
+      return null;
+    }
+
+    setOtpVerifying(true);
+    try {
+      const res = await fetch('/api/auth/verify-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: normalizedEmail, code: cleanCode }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || 'Código inválido ou expirado.');
+      }
+      setCreatorToken(data.token);
+      setVerifiedEmail(normalizedEmail);
+      setDevCodeHint('');
+      setOtpInfo('');
+      return data.token as string;
+    } catch (err) {
+      setOtpError(err instanceof Error ? err.message : 'Falha ao validar código.');
+      return null;
+    } finally {
+      setOtpVerifying(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -117,30 +220,44 @@ export const CreateRoomView: React.FC<CreateRoomViewProps> = ({ onBack, onRoomCr
     }));
     const invalidIdx = cleanedQuestions.findIndex((q) => q.prompt.length < 5);
     if (invalidIdx !== -1) {
-      setError(
-        `A Questão ${invalidIdx + 1} deve ter pelo menos 5 caracteres.`
-      );
+      setError(`A Questão ${invalidIdx + 1} deve ter pelo menos 5 caracteres.`);
       return;
     }
 
-    if (!cpfIsValid) {
-      setError('Informe um CPF válido (11 dígitos com dígitos verificadores corretos).');
-      return;
+    let activeToken = isEmailVerified ? creatorToken : '';
+    if (!activeToken) {
+      if (!isEmailValid) {
+        setError('Informe seu e-mail e conclua a verificação por código de 6 dígitos.');
+        return;
+      }
+      if (otpSent && otpCode.replace(/\D/g, '').length === 6) {
+        const verifiedToken = await verifyOtpCode();
+        if (!verifiedToken) return;
+        activeToken = verifiedToken;
+      } else {
+        setError('Clique em "Enviar código de verificação" e confirme o código de 6 dígitos recebido no seu e-mail.');
+        return;
+      }
     }
 
     setSubmitting(true);
     try {
       const res = await fetch('/api/rooms', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${activeToken}`,
+        },
         body: JSON.stringify({
           title: title.trim(),
           question: cleanedQuestions[0].prompt,
           questions: cleanedQuestions,
           contextType,
-          scale,
+          instrument: instrumentConfig.instrument,
+          scale: instrumentConfig.scale,
+          instrumentConfig,
+          requireParticipantName,
           allowComments,
-          cpf: cpfDigits,
           keepResponses: importedFileName ? keepResponses : false,
           importedResponses: importedFileName && keepResponses ? importedResponses : [],
           keepOriginalPin: importedFileName ? keepOriginalPin : false,
@@ -151,7 +268,7 @@ export const CreateRoomView: React.FC<CreateRoomViewProps> = ({ onBack, onRoomCr
       if (!res.ok) {
         throw new Error(data?.error || 'Não foi possível criar a sala.');
       }
-      onRoomCreated(data.room as RoomAdmin, cpfDigits);
+      onRoomCreated(data.room as RoomAdmin, activeToken);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erro ao criar a sala.');
     } finally {
@@ -176,7 +293,7 @@ export const CreateRoomView: React.FC<CreateRoomViewProps> = ({ onBack, onRoomCr
       <div>
         <h1 className="text-2xl sm:text-3xl font-bold text-slate-900">Criar ou Importar Sala</h1>
         <p className="mt-1 text-sm text-slate-600">
-          Configure os parâmetros do instrumento emoti-SAM para sua turma, oficina ou teste de usabilidade.
+          Configure os parâmetros do instrumento e-SAM para a avaliação da experiência afetiva no uso de um sistema computacional ou participação em ação de extensão.
         </p>
       </div>
 
@@ -286,8 +403,9 @@ export const CreateRoomView: React.FC<CreateRoomViewProps> = ({ onBack, onRoomCr
       </section>
 
       {/* Create Room Form */}
-      <form onSubmit={handleSubmit} className="rounded-xl border border-slate-200 bg-white p-6 sm:p-8 space-y-6" noValidate>
-        <div className="grid grid-cols-1 gap-5">
+      <form onSubmit={handleSubmit} className="rounded-xl border border-slate-200 bg-white p-6 sm:p-8 space-y-7" noValidate>
+        {/* Basic Metadata & Multi-Question Builder */}
+        <div className="space-y-5">
           <div>
             <label htmlFor="room-title" className="block text-sm font-semibold text-slate-900 mb-1.5">
               Título da Sala / Avaliação *
@@ -303,6 +421,43 @@ export const CreateRoomView: React.FC<CreateRoomViewProps> = ({ onBack, onRoomCr
             />
           </div>
 
+          <div>
+            <span className="block text-sm font-semibold text-slate-900 mb-2">
+              Tipo de Contexto *
+            </span>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5" role="radiogroup" aria-label="Tipo de contexto">
+              <button
+                type="button"
+                role="radio"
+                aria-checked={contextType === 'system'}
+                onClick={() => setContextType('system')}
+                className={`rounded-lg border px-3.5 py-3 text-left transition-all cursor-pointer ${
+                  contextType === 'system'
+                    ? 'border-blue-700 bg-blue-50/70 ring-2 ring-blue-600/15'
+                    : 'border-slate-200 bg-white hover:bg-slate-50'
+                }`}
+              >
+                <span className="block text-sm font-semibold text-slate-900">Sistema Computacional</span>
+                <span className="block text-xs text-slate-500 mt-0.5">Apps, sites, protótipos de IHC</span>
+              </button>
+
+              <button
+                type="button"
+                role="radio"
+                aria-checked={contextType === 'extension'}
+                onClick={() => setContextType('extension')}
+                className={`rounded-lg border px-3.5 py-3 text-left transition-all cursor-pointer ${
+                  contextType === 'extension'
+                    ? 'border-blue-700 bg-blue-50/70 ring-2 ring-blue-600/15'
+                    : 'border-slate-200 bg-white hover:bg-slate-50'
+                }`}
+              >
+                <span className="block text-sm font-semibold text-slate-900">Ação de Extensão</span>
+                <span className="block text-xs text-slate-500 mt-0.5">Oficinas, escolas e comunidade</span>
+              </button>
+            </div>
+          </div>
+
           <div className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
@@ -310,7 +465,7 @@ export const CreateRoomView: React.FC<CreateRoomViewProps> = ({ onBack, onRoomCr
                   Perguntas da Avaliação ({questions.length}) *
                 </span>
                 <span className="block text-xs text-slate-500">
-                  Cada questão será avaliada pelo participante nas 3 dimensões emoti-SAM (Valência, Excitação e Dominância).
+                  Cada questão será avaliada pelo participante nas 3 dimensões (Valência, Excitação e Dominância).
                 </span>
               </div>
               <button
@@ -367,167 +522,165 @@ export const CreateRoomView: React.FC<CreateRoomViewProps> = ({ onBack, onRoomCr
           </div>
         </div>
 
-        {/* Context & Scale */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div>
-            <span className="block text-sm font-semibold text-slate-900 mb-2">
-              Tipo de Contexto *
-            </span>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5" role="radiogroup" aria-label="Tipo de contexto">
-              <button
-                type="button"
-                role="radio"
-                aria-checked={contextType === 'system'}
-                onClick={() => setContextType('system')}
-                className={`rounded-lg border px-3.5 py-3 text-left transition-all cursor-pointer ${
-                  contextType === 'system'
-                    ? 'border-blue-700 bg-blue-50/70 ring-2 ring-blue-600/15'
-                    : 'border-slate-200 bg-white hover:bg-slate-50'
-                }`}
-              >
-                <span className="block text-sm font-semibold text-slate-900">Sistema Computacional</span>
-                <span className="block text-xs text-slate-500 mt-0.5">Apps, sites, protótipos de IHC</span>
-              </button>
-
-              <button
-                type="button"
-                role="radio"
-                aria-checked={contextType === 'extension'}
-                onClick={() => setContextType('extension')}
-                className={`rounded-lg border px-3.5 py-3 text-left transition-all cursor-pointer ${
-                  contextType === 'extension'
-                    ? 'border-blue-700 bg-blue-50/70 ring-2 ring-blue-600/15'
-                    : 'border-slate-200 bg-white hover:bg-slate-50'
-                }`}
-              >
-                <span className="block text-sm font-semibold text-slate-900">Ação de Extensão</span>
-                <span className="block text-xs text-slate-500 mt-0.5">Oficinas, escolas e comunidade</span>
-              </button>
-            </div>
-          </div>
-
-          <div>
-            <span className="block text-sm font-semibold text-slate-900 mb-2">
-              Escala do Instrumento emoti-SAM *
-            </span>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5" role="radiogroup" aria-label="Escala do instrumento">
-              <button
-                type="button"
-                role="radio"
-                aria-checked={scale === 5}
-                onClick={() => setScale(5)}
-                className={`rounded-lg border px-3.5 py-3 text-left transition-all cursor-pointer ${
-                  scale === 5
-                    ? 'border-blue-700 bg-blue-50/70 ring-2 ring-blue-600/15'
-                    : 'border-slate-200 bg-white hover:bg-slate-50'
-                }`}
-              >
-                <span className="block text-sm font-semibold text-slate-900">Escala de 5 pontos</span>
-                <span className="block text-xs text-slate-500 mt-0.5">Ideal para extensão e público geral</span>
-              </button>
-
-              <button
-                type="button"
-                role="radio"
-                aria-checked={scale === 9}
-                onClick={() => setScale(9)}
-                className={`rounded-lg border px-3.5 py-3 text-left transition-all cursor-pointer ${
-                  scale === 9
-                    ? 'border-blue-700 bg-blue-50/70 ring-2 ring-blue-600/15'
-                    : 'border-slate-200 bg-white hover:bg-slate-50'
-                }`}
-              >
-                <span className="block text-sm font-semibold text-slate-900">Escala de 9 pontos</span>
-                <span className="block text-xs text-slate-500 mt-0.5">Pontos intermediários para sistemas</span>
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Scale live preview */}
-        <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-4">
-          <div className="flex items-center justify-between text-xs text-slate-600 mb-3">
-            <span className="font-semibold text-slate-800">
-              Pré-visualização (Dimensão Dominância · Escala de {scale} pontos)
-            </span>
-            <span className="font-mono">{scale === 9 ? '9 opções (9 a 1)' : '5 figuras diretas (5 a 1)'}</span>
-          </div>
-          <div className="grid grid-cols-5 gap-2 items-center justify-items-center">
-            {([5, 4, 3, 2, 1] as const).map((level) => (
-              <div key={level} className="flex flex-col items-center gap-1">
-                <EmotiSamFace dimension="dominance" anchorLevel={level} scaleVariant={scale} className="w-11 h-9 sm:w-14 sm:h-11" />
-                <span className="text-[11px] font-mono text-slate-600">
-                  {scale === 9 ? level * 2 - 1 : level}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Comments toggle */}
-        <label className="flex items-center gap-3 cursor-pointer select-none">
-          <input
-            type="checkbox"
-            checked={allowComments}
-            onChange={(e) => setAllowComments(e.target.checked)}
-            className="h-4 w-4 rounded border-slate-300 text-blue-700 focus:ring-blue-600"
+        {/* Instrument, Scales (3/5/9), Customization, Ordering & Full Live 3-Dimension Preview */}
+        <div className="pt-5 border-t border-slate-200">
+          <InstrumentConfigurator
+            config={instrumentConfig}
+            onChange={setInstrumentConfig}
+            idPrefix="create"
           />
-          <span className="text-sm text-slate-800">
-            Permitir campo opcional de comentário aberto aos participantes
-          </span>
-        </label>
+        </div>
 
-        {/* Creator CPF Certification */}
-        <div className="pt-4 border-t border-slate-200 space-y-3">
+        {/* Participant Options */}
+        <div className="pt-5 border-t border-slate-200 space-y-3">
+          <span className="block text-sm font-semibold text-slate-900">
+            Opções de Participação
+          </span>
+          <label className="flex items-start gap-3 cursor-pointer select-none">
+            <input
+              id="require-participant-name"
+              type="checkbox"
+              checked={requireParticipantName}
+              onChange={(e) => setRequireParticipantName(e.target.checked)}
+              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-700 focus:ring-blue-600"
+            />
+            <span className="text-sm text-slate-800">
+              <strong>Exigir identificação do respondente</strong>
+              <span className="block text-xs text-slate-500 mt-0.5">
+                Desativado por padrão (avaliação anônima). Mesmo quando desativado ou com nomes repetidos, cada submissão recebe um <code className="font-mono">ID_Usuario</code> único.
+              </span>
+            </span>
+          </label>
+
+          <label className="flex items-start gap-3 cursor-pointer select-none">
+            <input
+              id="allow-comments"
+              type="checkbox"
+              checked={allowComments}
+              onChange={(e) => setAllowComments(e.target.checked)}
+              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-700 focus:ring-blue-600"
+            />
+            <span className="text-sm text-slate-800">
+              Permitir campo opcional de comentário aberto aos participantes
+            </span>
+          </label>
+        </div>
+
+        {/* Creator Identification via Email + 6-digit OTP */}
+        <div className="pt-5 border-t border-slate-200 space-y-4">
           <div>
-            <label htmlFor="creator-cpf" className="block text-sm font-semibold text-slate-900 mb-1">
-              CPF do Criador (Chave de Acesso ao Painel) *
+            <label htmlFor="creator-email" className="block text-sm font-semibold text-slate-900 mb-1">
+              E-mail do Criador (Verificação por Código OTP) *
             </label>
-            <p className="text-xs text-slate-600 mb-2">
-              Necessário para acessar resultados, exportar CSV/JSON e excluir a sala antecipadamente.
+            <p className="text-xs text-slate-600 mb-2.5">
+              Confirme a titularidade do seu e-mail para proteger o acesso ao painel de resultados, exportação e edição da sala.
             </p>
-            <div className="max-w-xs">
-              <input
-                id="creator-cpf"
-                type="text"
-                inputMode="numeric"
-                maxLength={14}
-                value={cpf}
-                onChange={(e) => setCpf(formatCpfMask(e.target.value))}
-                placeholder="000.000.000-00"
-                className={`w-full rounded-lg border px-3.5 py-2.5 text-sm font-mono tabular-nums focus:outline-none focus:ring-2 ${
-                  cpfHasError
-                    ? 'border-red-400 bg-red-50/40 text-red-900 focus:ring-red-200'
-                    : cpfIsValid
-                    ? 'border-emerald-500 bg-emerald-50/30 text-slate-900 focus:ring-emerald-200'
-                    : 'border-slate-300 bg-white text-slate-900 focus:border-blue-700 focus:ring-blue-600/20'
-                }`}
-              />
+
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+              <div className="relative flex-1 max-w-md">
+                <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" aria-hidden="true" />
+                <input
+                  id="creator-email"
+                  type="email"
+                  autoComplete="email"
+                  value={email}
+                  onChange={(e) => handleEmailChange(e.target.value)}
+                  placeholder="pesquisador@universidade.edu.br"
+                  className={`w-full rounded-lg border pl-9 pr-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 ${
+                    isEmailVerified
+                      ? 'border-emerald-500 bg-emerald-50/30 text-slate-900 focus:ring-emerald-200'
+                      : 'border-slate-300 bg-white text-slate-900 focus:border-blue-700 focus:ring-blue-600/20'
+                  }`}
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={handleRequestOtp}
+                disabled={otpSending || !isEmailValid}
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-blue-700 bg-blue-50 px-4 py-2.5 text-xs font-semibold text-blue-800 hover:bg-blue-100 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+              >
+                <Send className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>
+                  {otpSending
+                    ? 'Enviando...'
+                    : otpSent
+                    ? 'Reenviar código'
+                    : 'Enviar código de verificação'}
+                </span>
+              </button>
             </div>
-            {cpfHasError && (
-              <p className="mt-1.5 text-xs font-medium text-red-700 flex items-center gap-1.5">
-                <ShieldAlert className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-                <span>CPF matematicamente inválido. Verifique os dígitos verificadores.</span>
-              </p>
-            )}
-            {cpfIsValid && (
-              <p className="mt-1.5 text-xs font-medium text-emerald-700 flex items-center gap-1.5">
-                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-                <span>CPF válido. Será convertido em hash SHA-256 irreversível no servidor.</span>
-              </p>
-            )}
           </div>
+
+          {isEmailVerified && (
+            <p className="text-xs font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3.5 py-2.5 flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" aria-hidden="true" />
+              <span>E-mail <strong>{verifiedEmail}</strong> verificado com sucesso. Você já pode criar a sala.</span>
+            </p>
+          )}
+
+          {otpSent && !isEmailVerified && (
+            <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-4 space-y-3">
+              {otpInfo && <p className="text-xs text-slate-700">{otpInfo}</p>}
+
+              {devCodeHint && (
+                <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-950 flex flex-wrap items-center justify-between gap-2">
+                  <span>
+                    Modo de desenvolvimento (sem <code className="font-mono">EMAIL_API_KEY</code>): código de verificação{' '}
+                    <strong className="font-mono text-sm tracking-widest">{devCodeHint}</strong>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setOtpCode(devCodeHint)}
+                    className="rounded border border-amber-400 bg-white px-2.5 py-1 text-[11px] font-semibold text-amber-900 hover:bg-amber-100 cursor-pointer"
+                  >
+                    Preencher código
+                  </button>
+                </div>
+              )}
+
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-end gap-2.5">
+                <div className="max-w-[220px] flex-1">
+                  <label htmlFor="creator-otp-code" className="block text-xs font-semibold text-slate-800 mb-1">
+                    Código de verificação (6 dígitos)
+                  </label>
+                  <input
+                    id="creator-otp-code"
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={6}
+                    value={otpCode}
+                    onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    placeholder="000000"
+                    className="w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-center text-base font-mono font-bold tracking-[0.25em] tabular-nums text-slate-900 focus:border-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-600/20"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={verifyOtpCode}
+                  disabled={otpVerifying || otpCode.length !== 6}
+                  className="rounded-lg bg-slate-900 px-4 py-2.5 text-xs font-semibold text-white hover:bg-slate-800 transition-colors cursor-pointer disabled:opacity-50 whitespace-nowrap"
+                >
+                  {otpVerifying ? 'Confirmando...' : 'Confirmar código'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {otpError && (
+            <p role="alert" className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+              {otpError}
+            </p>
+          )}
 
           <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600 flex items-start gap-2.5">
             <Info className="w-4 h-4 text-blue-700 shrink-0 mt-0.5" aria-hidden="true" />
             <div className="space-y-1">
               <p>
-                <strong>Segurança e LGPD:</strong> O servidor nunca armazena seu CPF em texto puro — apenas o
-                resumo criptográfico SHA-256 para autenticar seu acesso ao painel.
+                <strong>Integridade Metodológica:</strong> As configurações do instrumento poderão ser ajustadas no Painel do Criador apenas enquanto a sala não possuir respostas. Após a 1ª resposta, ficam bloqueadas permanentemente.
               </p>
               <p>
-                <strong>Retenção Máxima de 30 Dias:</strong> Esta sala e suas respostas permanecerão disponíveis
-                por no máximo <strong>30 dias</strong> a partir da criação, sendo apagadas automaticamente após o prazo.
+                <strong>Privacidade e Retenção:</strong> O servidor armazena apenas o hash SHA-256 do seu e-mail e remove automaticamente a sala após <strong>30 dias</strong>.
               </p>
             </div>
           </div>

@@ -9,17 +9,19 @@ import {
   Send,
 } from 'lucide-react';
 import {
-  DIMENSIONS,
+  DIMENSION_KEYS,
+  createDefaultInstrumentConfig,
   getContextLabel,
+  getInstrumentLabel,
   getRoomQuestionsList,
+  scoreToAnchorLevel,
   type RoomPublic,
 } from '../utils/emotiSam';
-import { EmotiSamFace } from './EmotiSamFaces';
 import { EmotiSamRow } from './EmotiSamRow';
+import { InstrumentFigure } from './InstrumentFigure';
 
 interface EvaluateViewProps {
   room: RoomPublic;
-  initialParticipantName: string;
   onExitHome: () => void;
 }
 
@@ -48,13 +50,16 @@ const EMPTY_DRAFT: QuestionDraft = {
 
 export const EvaluateView: React.FC<EvaluateViewProps> = ({
   room: initialRoom,
-  initialParticipantName,
   onExitHome,
 }) => {
   const [room, setRoom] = useState<RoomPublic>(initialRoom);
   const questions = useMemo(() => getRoomQuestionsList(room), [room]);
+  const instrumentConfig = useMemo(
+    () => room.instrumentConfig || createDefaultInstrumentConfig(room.instrument || 'e-sam', room.scale),
+    [room.instrumentConfig, room.instrument, room.scale]
+  );
 
-  const [participantName, setParticipantName] = useState(initialParticipantName);
+  const [participantName, setParticipantName] = useState('');
   const [currentIndex, setCurrentIndex] = useState(0);
   const [drafts, setDrafts] = useState<Record<string, QuestionDraft>>({});
   const [refreshingQuestions, setRefreshingQuestions] = useState(false);
@@ -63,6 +68,7 @@ export const EvaluateView: React.FC<EvaluateViewProps> = ({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [submittedSummary, setSubmittedSummary] = useState<{
+    userId: string;
     participantName: string;
     items: SubmittedQuestionSummary[];
   } | null>(null);
@@ -139,8 +145,8 @@ export const EvaluateView: React.FC<EvaluateViewProps> = ({
     setAttemptedStep(true);
     setError('');
 
-    if (!participantName.trim()) {
-      setError('Informe seu nome ou apelido antes de enviar.');
+    if (room.requireParticipantName && !participantName.trim()) {
+      setError('Informe sua identificação antes de enviar a avaliação.');
       return;
     }
 
@@ -150,7 +156,7 @@ export const EvaluateView: React.FC<EvaluateViewProps> = ({
       setError(
         questions.length > 1
           ? `Responda às 3 dimensões na Questão ${firstIncompleteIdx + 1} antes de enviar.`
-          : 'Selecione uma opção nas 3 dimensões (Valência, Excitação e Dominância).'
+          : 'Selecione uma opção nas 3 dimensões antes de enviar.'
       );
       return;
     }
@@ -172,7 +178,7 @@ export const EvaluateView: React.FC<EvaluateViewProps> = ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          participantName: participantName.trim(),
+          participantName: room.requireParticipantName ? participantName.trim() : '',
           answers: answersPayload,
         }),
       });
@@ -181,7 +187,8 @@ export const EvaluateView: React.FC<EvaluateViewProps> = ({
         throw new Error(data?.error || 'Falha ao enviar avaliação.');
       }
       setSubmittedSummary({
-        participantName: participantName.trim(),
+        userId: String(data.userId || ''),
+        participantName: room.requireParticipantName ? participantName.trim() : '',
         items: questions.map((q, idx) => {
           const d = drafts[q.id] || EMPTY_DRAFT;
           return {
@@ -211,11 +218,6 @@ export const EvaluateView: React.FC<EvaluateViewProps> = ({
     await handleRefreshQuestions();
   };
 
-  const toAnchor = (score: number): 1 | 2 | 3 | 4 | 5 => {
-    if (room.scale === 5) return Math.min(5, Math.max(1, score)) as 1 | 2 | 3 | 4 | 5;
-    return Math.min(5, Math.max(1, Math.round((score + 1) / 2))) as 1 | 2 | 3 | 4 | 5;
-  };
-
   if (submittedSummary) {
     return (
       <div className="max-w-2xl mx-auto py-8">
@@ -229,63 +231,66 @@ export const EvaluateView: React.FC<EvaluateViewProps> = ({
               Avaliação registrada!
             </h1>
             <p className="text-sm sm:text-base text-slate-600">
-              Obrigado, <strong>{submittedSummary.participantName}</strong>.{' '}
+              {submittedSummary.participantName ? (
+                <>Obrigado, <strong>{submittedSummary.participantName}</strong>. </>
+              ) : (
+                <>Obrigado pela participação. </>
+              )}
               {submittedSummary.items.length > 1
                 ? `Suas respostas para as ${submittedSummary.items.length} questões na sala `
                 : 'Sua resposta afetiva na sala '}
               <strong className="font-mono">{room.pin}</strong> foram salvas com sucesso.
             </p>
+            {submittedSummary.userId && (
+              <p className="text-xs font-mono text-slate-500">
+                Identificador da submissão: <strong className="text-slate-700">{submittedSummary.userId}</strong>
+              </p>
+            )}
           </div>
 
           <div className="space-y-4 text-left">
-            {submittedSummary.items.map((item) => (
-              <div key={item.questionId} className="rounded-xl border border-slate-200 bg-slate-50/70 p-4 space-y-3">
-                {submittedSummary.items.length > 1 && (
-                  <p className="text-xs font-semibold text-slate-800">
-                    <span className="font-mono text-blue-700 mr-1.5">Q{item.questionIndex}</span>
-                    {item.prompt}
-                  </p>
-                )}
-                <div className="grid grid-cols-3 gap-2.5">
-                  <div className="rounded-lg border border-slate-200 bg-white p-2.5 flex flex-col items-center">
-                    <EmotiSamFace
-                      dimension="valence"
-                      anchorLevel={toAnchor(item.valence)}
-                      scaleVariant={room.scale}
-                      className="w-11 h-9 sm:w-14 sm:h-12"
-                    />
-                    <span className="mt-1 text-[11px] text-slate-600">Valência</span>
-                    <span className="text-sm font-mono font-bold text-slate-900 tabular-nums">
-                      {item.valence} / {room.scale}
-                    </span>
-                  </div>
-                  <div className="rounded-lg border border-slate-200 bg-white p-2.5 flex flex-col items-center">
-                    <EmotiSamFace
-                      dimension="arousal"
-                      anchorLevel={toAnchor(item.arousal)}
-                      scaleVariant={room.scale}
-                      className="w-11 h-9 sm:w-14 sm:h-12"
-                    />
-                    <span className="mt-1 text-[11px] text-slate-600">Excitação</span>
-                    <span className="text-sm font-mono font-bold text-slate-900 tabular-nums">
-                      {item.arousal} / {room.scale}
-                    </span>
-                  </div>
-                  <div className="rounded-lg border border-slate-200 bg-white p-2.5 flex flex-col items-center">
-                    <EmotiSamFace
-                      dimension="dominance"
-                      anchorLevel={toAnchor(item.dominance)}
-                      scaleVariant={room.scale}
-                      className="w-11 h-9 sm:w-14 sm:h-12"
-                    />
-                    <span className="mt-1 text-[11px] text-slate-600">Dominância</span>
-                    <span className="text-sm font-mono font-bold text-slate-900 tabular-nums">
-                      {item.dominance} / {room.scale}
-                    </span>
+            {submittedSummary.items.map((item) => {
+              const scoreByDim = {
+                valence: item.valence,
+                arousal: item.arousal,
+                dominance: item.dominance,
+              };
+              return (
+                <div key={item.questionId} className="rounded-xl border border-slate-200 bg-slate-50/70 p-4 space-y-3">
+                  {submittedSummary.items.length > 1 && (
+                    <p className="text-xs font-semibold text-slate-800">
+                      <span className="font-mono text-blue-700 mr-1.5">Q{item.questionIndex}</span>
+                      {item.prompt}
+                    </p>
+                  )}
+                  <div className="grid grid-cols-3 gap-2.5">
+                    {DIMENSION_KEYS.map((dimKey) => {
+                      const score = scoreByDim[dimKey];
+                      const anchor = scoreToAnchorLevel(score, room.scale);
+                      const dimCfg = instrumentConfig.dimensions[dimKey];
+                      return (
+                        <div key={dimKey} className="rounded-lg border border-slate-200 bg-white p-2.5 flex flex-col items-center">
+                          <InstrumentFigure
+                            instrument={instrumentConfig.instrument}
+                            dimension={dimKey}
+                            anchorLevel={anchor}
+                            altText={dimCfg.altTexts[anchor]}
+                            customImage={dimCfg.customImages?.[anchor]}
+                            className="w-11 h-9 sm:w-14 sm:h-12"
+                          />
+                          <span className="mt-1 text-[11px] text-slate-600 text-center">
+                            {dimCfg.title.split(' / ')[0]}
+                          </span>
+                          <span className="text-sm font-mono font-bold text-slate-900 tabular-nums">
+                            {score} / {room.scale}
+                          </span>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-4">
@@ -323,6 +328,8 @@ export const EvaluateView: React.FC<EvaluateViewProps> = ({
         </button>
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
           <span className="font-mono font-semibold text-slate-700 whitespace-nowrap">PIN {room.pin}</span>
+          <span aria-hidden="true">·</span>
+          <span className="whitespace-nowrap">{getInstrumentLabel(instrumentConfig.instrument)}</span>
           <span aria-hidden="true">·</span>
           <span className="whitespace-nowrap">{getContextLabel(room.contextType)}</span>
           <span aria-hidden="true">·</span>
@@ -389,45 +396,42 @@ export const EvaluateView: React.FC<EvaluateViewProps> = ({
         <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 leading-snug" style={{ textWrap: 'balance' }}>
           {currentQuestion.prompt}
         </h1>
-        <div className="pt-2 max-w-sm">
-          <label htmlFor="eval-participant-name" className="block text-xs font-medium text-slate-600 mb-1">
-            Participante
-          </label>
-          <input
-            id="eval-participant-name"
-            type="text"
-            maxLength={80}
-            value={participantName}
-            onChange={(e) => setParticipantName(e.target.value)}
-            placeholder="Seu nome ou apelido"
-            className="w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-blue-700 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-600/20"
-          />
-        </div>
+
+        {/* Identification field ONLY when explicitly enabled by the room creator */}
+        {room.requireParticipantName && (
+          <div className="pt-2 max-w-sm">
+            <label htmlFor="eval-participant-name" className="block text-xs font-semibold text-slate-700 mb-1">
+              Identificação do Participante *
+            </label>
+            <input
+              id="eval-participant-name"
+              type="text"
+              maxLength={80}
+              value={participantName}
+              onChange={(e) => setParticipantName(e.target.value)}
+              placeholder="Seu nome ou apelido"
+              className="w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-blue-700 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-600/20"
+            />
+          </div>
+        )}
       </div>
 
-      {/* 3 emoti-SAM Dimensions */}
+      {/* 3 Purely Pictorial Affective Dimensions */}
       <form onSubmit={handleSubmit} className="space-y-5" noValidate>
-        <EmotiSamRow
-          dimension={DIMENSIONS[0]}
-          scale={room.scale}
-          value={currentDraft.valence}
-          onChange={(score) => updateCurrentDraft({ valence: score })}
-          hasError={attemptedStep && currentDraft.valence === null}
-        />
-        <EmotiSamRow
-          dimension={DIMENSIONS[1]}
-          scale={room.scale}
-          value={currentDraft.arousal}
-          onChange={(score) => updateCurrentDraft({ arousal: score })}
-          hasError={attemptedStep && currentDraft.arousal === null}
-        />
-        <EmotiSamRow
-          dimension={DIMENSIONS[2]}
-          scale={room.scale}
-          value={currentDraft.dominance}
-          onChange={(score) => updateCurrentDraft({ dominance: score })}
-          hasError={attemptedStep && currentDraft.dominance === null}
-        />
+        {DIMENSION_KEYS.map((dimKey) => (
+          <EmotiSamRow
+            key={dimKey}
+            dimensionKey={dimKey}
+            dimensionConfig={instrumentConfig.dimensions[dimKey]}
+            instrument={instrumentConfig.instrument}
+            scale={instrumentConfig.scale}
+            showDimensionTexts={instrumentConfig.showDimensionTexts}
+            value={currentDraft[dimKey]}
+            onChange={(score) => updateCurrentDraft({ [dimKey]: score })}
+            hasError={attemptedStep && currentDraft[dimKey] === null}
+            idPrefix={`eval-${currentQuestion.id}`}
+          />
+        ))}
 
         {room.allowComments && (
           <div className="rounded-xl border border-slate-200 bg-white p-5 sm:p-6">

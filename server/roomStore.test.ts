@@ -1,276 +1,222 @@
-import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { afterEach, beforeEach, describe, it } from 'node:test';
+import { hashEmail } from './otpService.js';
 import {
   RETENTION_MS,
   addQuestionToRoom,
   addResponse,
-  authenticateAdmin,
+  authenticateAdminSession,
   cleanupExpiredRooms,
   createOrImportRoom,
   deleteRoom,
   getPublicRoom,
-  hashCpf,
-  readRooms,
-  resolveDataDir,
+  updateRoomConfig,
+  verifyRoomCreatorEmail,
 } from './roomStore.js';
 
-function createTempDir() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'emoti-sam-test-'));
-}
+const CREATOR_EMAIL = 'pesquisador@universidade.edu.br';
+const CREATOR_SESSION = { email: CREATOR_EMAIL, emailHash: hashEmail(CREATOR_EMAIL) };
+const OTHER_SESSION = { email: 'outro@universidade.edu.br', emailHash: hashEmail('outro@universidade.edu.br') };
 
-test('resolveDataDir prefers RAILWAY_VOLUME_MOUNT_PATH when set', () => {
-  const prev = process.env.RAILWAY_VOLUME_MOUNT_PATH;
-  process.env.RAILWAY_VOLUME_MOUNT_PATH = '/mnt/railway-data';
-  assert.equal(resolveDataDir(), '/mnt/railway-data');
-  if (prev === undefined) {
-    delete process.env.RAILWAY_VOLUME_MOUNT_PATH;
-  } else {
-    process.env.RAILWAY_VOLUME_MOUNT_PATH = prev;
-  }
-});
+describe('roomStore persistence, anonymity, ID_Usuario & methodological lock', () => {
+  let tempDir = '';
 
-test('room lifecycle: create with SHA-256 CPF hash, respond, authenticate, and delete', () => {
-  const dir = createTempDir();
-  try {
-    const now = 1700000000000;
-    const validCpf = '529.982.247-25';
-    const otherCpf = '111.444.777-35';
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'esam-test-'));
+  });
 
+  afterEach(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('creates rooms with 3/5/9 scales, SAM Original canonical ordering, and anonymous-by-default submissions with unique ID_Usuario', () => {
+    const now = 1_700_000_000_000;
     const created = createOrImportRoom(
-      dir,
+      tempDir,
       {
-        title: 'Avaliação Portal Acadêmico',
-        question: 'Como você se sentiu usando o portal?',
+        title: 'Avaliação SAM 3 pontos',
+        questions: [{ id: 'q1', prompt: 'Como você se sentiu no aplicativo?' }],
         contextType: 'system',
-        scale: 9,
-        allowComments: true,
-        cpf: validCpf,
+        instrument: 'sam',
+        scale: 3,
       },
+      CREATOR_SESSION,
       now
     );
 
     assert.equal(created.status, 201);
     assert.ok(created.room);
-    const pin = created.room.pin;
-    assert.match(pin, /^\d{6}$/);
-    assert.equal(created.room.expiresAt, now + RETENTION_MS);
+    assert.equal(created.room.instrument, 'sam');
+    assert.equal(created.room.scale, 3);
+    assert.equal(created.room.requireParticipantName, false);
+    assert.equal(created.room.locked, false);
+    // SAM Original Dominance defaults to neg-to-pos
+    const dims = created.room.instrumentConfig.dimensions as Record<string, { order: string }>;
+    assert.equal(dims.dominance.order, 'neg-to-pos');
+    assert.equal(dims.valence.order, 'pos-to-neg');
 
-    // Ensure plaintext CPF is never stored on disk
-    const rawFile = fs.readFileSync(path.join(dir, 'rooms.json'), 'utf8');
-    assert.equal(rawFile.includes('52998224725'), false);
-    assert.equal(rawFile.includes('529.982.247-25'), false);
-    assert.equal(rawFile.includes(hashCpf(validCpf)), true);
+    // Anonymous submission succeeds without participantName and generates unique ID_Usuario
+    const r1 = addResponse(tempDir, created.room.pin, { valence: 3, arousal: 2, dominance: 1 }, now + 1000);
+    assert.equal(r1.status, 201);
+    assert.ok(r1.userId && r1.userId.startsWith('USR-'));
+    assert.equal(r1.response?.participantName, '');
 
-    // Public room fetch
-    const pub = getPublicRoom(dir, pin, now + 1000);
-    assert.equal(pub.status, 200);
-    assert.ok(pub.room);
-    assert.equal(pub.room.scale, 9);
-    assert.equal(pub.room.responseCount, 0);
+    const r2 = addResponse(tempDir, created.room.pin, { valence: 2, arousal: 2, dominance: 3 }, now + 2000);
+    assert.equal(r2.status, 201);
+    assert.notEqual(r1.userId, r2.userId);
 
-    // Submit response
-    const resp = addResponse(
-      dir,
-      pin,
-      {
-        participantName: 'Lucas',
-        valence: 8,
-        arousal: 7,
-        dominance: 9,
-        comment: 'Interface bem clara.',
-      },
-      now + 2000
-    );
-    assert.equal(resp.status, 201);
-    assert.equal(resp.responseCount, 1);
+    // Out-of-range score rejected on 3-point scale
+    const invalidScore = addResponse(tempDir, created.room.pin, { valence: 4, arousal: 2, dominance: 1 }, now + 3000);
+    assert.equal(invalidScore.status, 400);
+  });
 
-    // Wrong CPF rejected
-    const badAuth = authenticateAdmin(dir, pin, otherCpf, now + 3000);
-    assert.equal(badAuth.status, 403);
-
-    // Correct CPF authenticated
-    const goodAuth = authenticateAdmin(dir, pin, validCpf, now + 3000);
-    assert.equal(goodAuth.status, 200);
-    assert.ok(goodAuth.room);
-    assert.equal(goodAuth.room.responses.length, 1);
-    assert.equal(goodAuth.room.responses[0].valence, 8);
-    assert.equal('cpfHash' in goodAuth.room, false);
-
-    // Delete room
-    const del = deleteRoom(dir, pin, validCpf, now + 4000);
-    assert.equal(del.status, 200);
-    assert.equal(getPublicRoom(dir, pin, now + 5000).status, 404);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('30-day automatic expiration prunes expired rooms on read and cleanup', () => {
-  const dir = createTempDir();
-  try {
-    const now = 1700000000000;
+  it('enforces required identification only when enabled and differentiates homonyms via ID_Usuario', () => {
+    const now = 1_700_000_000_000;
     const created = createOrImportRoom(
-      dir,
+      tempDir,
       {
-        title: 'Ação de Extensão',
-        question: 'Como foi a oficina?',
+        title: 'Oficina com Identificação',
+        question: 'Como foi a oficina prática?',
         contextType: 'extension',
+        instrument: 'e-sam',
         scale: 5,
-        allowComments: true,
-        cpf: '529.982.247-25',
+        requireParticipantName: true,
       },
+      CREATOR_SESSION,
+      now
+    );
+    assert.ok(created.room);
+
+    // Missing name fails when requireParticipantName is true
+    const missing = addResponse(tempDir, created.room.pin, { valence: 5, arousal: 4, dominance: 5 }, now + 100);
+    assert.equal(missing.status, 400);
+
+    // Two homonyms named "Fulano" get distinct ID_Usuario values
+    const f1 = addResponse(
+      tempDir,
+      created.room.pin,
+      { participantName: 'Fulano', valence: 5, arousal: 4, dominance: 5 },
+      now + 200
+    );
+    const f2 = addResponse(
+      tempDir,
+      created.room.pin,
+      { participantName: 'Fulano', valence: 2, arousal: 3, dominance: 2 },
+      now + 300
+    );
+    assert.equal(f1.status, 201);
+    assert.equal(f2.status, 201);
+    assert.notEqual(f1.userId, f2.userId);
+    assert.equal(f1.response?.participantName, 'Fulano');
+    assert.equal(f2.response?.participantName, 'Fulano');
+  });
+
+  it('allows editing instrument config at 0 responses and permanently locks (409) after 1st response', () => {
+    const now = 1_700_000_000_000;
+    const created = createOrImportRoom(
+      tempDir,
+      {
+        title: 'Teste de Bloqueio Metodológico',
+        question: 'Avalie o protótipo navegável.',
+        contextType: 'system',
+        instrument: 'e-sam',
+        scale: 5,
+      },
+      CREATOR_SESSION,
       now
     );
     assert.ok(created.room);
     const pin = created.room.pin;
 
-    // Still active at 29 days
-    assert.equal(readRooms(dir, now + RETENTION_MS - 1000).length, 1);
-
-    // Expired at 30 days + 1ms
-    const cleaned = cleanupExpiredRooms(dir, now + RETENTION_MS + 1);
-    assert.equal(cleaned.removed, 1);
-    assert.equal(cleaned.remaining, 0);
-    assert.equal(getPublicRoom(dir, pin, now + RETENTION_MS + 1).status, 404);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('import/clone room supports keeping responses and optional original PIN', () => {
-  const dir = createTempDir();
-  try {
-    const now = 1700000000000;
-    const imported = createOrImportRoom(
-      dir,
+    // Editable when 0 responses
+    const updated = updateRoomConfig(
+      tempDir,
+      pin,
       {
-        title: 'Turma B Clonada',
-        question: 'Como você avalia a atividade?',
-        contextType: 'extension',
-        scale: 5,
-        allowComments: true,
-        cpf: '529.982.247-25',
-        keepOriginalPin: true,
-        requestedPin: '654321',
-        keepResponses: true,
-        importedResponses: [
-          {
-            id: 'old-1',
-            participantName: 'Ana',
-            valence: 5,
-            arousal: 5,
-            dominance: 4,
-            comment: 'Ótimo!',
-            submittedAt: '2026-11-16T12:00:00.000Z',
-          },
-        ],
-      },
-      now
-    );
-
-    assert.equal(imported.status, 201);
-    assert.ok(imported.room);
-    assert.equal(imported.room.pin, '654321');
-    assert.equal(imported.room.responses.length, 1);
-
-    // Attempting to clone again with the same PIN while active yields 409
-    const duplicate = createOrImportRoom(
-      dir,
-      {
-        title: 'Conflito',
-        question: 'Pergunta teste?',
-        contextType: 'system',
-        scale: 5,
-        allowComments: true,
-        cpf: '529.982.247-25',
-        keepOriginalPin: true,
-        requestedPin: '654321',
-        keepResponses: false,
-      },
-      now + 1000
-    );
-    assert.equal(duplicate.status, 409);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('multi-question rooms: create with multiple questions, add question live, and submit multi-question answers', () => {
-  const dir = createTempDir();
-  try {
-    const now = 1700000000000;
-    const validCpf = '529.982.247-25';
-    const created = createOrImportRoom(
-      dir,
-      {
-        title: 'Teste de Usabilidade Multi-Etapa',
-        questions: [
-          { id: 'q1', prompt: 'Como você se sentiu na tela de login?' },
-          { id: 'q2', prompt: 'Como você se sentiu ao gerar o relatório?' },
-        ],
-        contextType: 'system',
+        instrument: 'sam',
         scale: 9,
-        allowComments: true,
-        cpf: validCpf,
+        requireParticipantName: true,
       },
-      now
-    );
-
-    assert.equal(created.status, 201);
-    assert.ok(created.room);
-    const pin = created.room.pin;
-    assert.equal(created.room.questions.length, 2);
-
-    // Creator adds a 3rd question to the active room
-    const addedBadCpf = addQuestionToRoom(
-      dir,
-      pin,
-      { cpf: '111.444.777-35', prompt: 'Como foi o checkout?' },
+      CREATOR_SESSION,
       now + 500
     );
-    assert.equal(addedBadCpf.status, 403);
+    assert.equal(updated.status, 200);
+    assert.ok(updated.room);
+    assert.equal(updated.room.instrument, 'sam');
+    assert.equal(updated.room.scale, 9);
+    assert.equal(updated.room.requireParticipantName, true);
+    assert.equal(updated.room.locked, false);
 
-    const added = addQuestionToRoom(
-      dir,
+    // Submit 1st response
+    const resp = addResponse(
+      tempDir,
       pin,
-      { cpf: validCpf, prompt: 'Como você se sentiu ao finalizar a tarefa?' },
+      { participantName: 'Maria', valence: 8, arousal: 7, dominance: 9 },
       now + 1000
     );
-    assert.equal(added.status, 201);
-    assert.ok(added.room);
-    assert.equal(added.room.questions.length, 3);
-    assert.equal(added.room.questions[2].id, 'q3');
-
-    // Public room exposes all 3 questions
-    const pub = getPublicRoom(dir, pin, now + 1500);
-    assert.equal(pub.status, 200);
-    assert.ok(pub.room);
-    assert.equal(pub.room.questions.length, 3);
-
-    // Participant submits answers for all 3 questions
-    const resp = addResponse(
-      dir,
-      pin,
-      {
-        participantName: 'Carla',
-        answers: [
-          { questionId: 'q1', valence: 7, arousal: 6, dominance: 8, comment: 'Rápido' },
-          { questionId: 'q2', valence: 4, arousal: 7, dominance: 3, comment: 'Filtro confuso' },
-          { questionId: 'q3', valence: 9, arousal: 8, dominance: 9, comment: '' },
-        ],
-      },
-      now + 2000
-    );
     assert.equal(resp.status, 201);
-    assert.equal(resp.responseCount, 3);
-    assert.ok(resp.responses);
-    assert.equal(resp.responses.length, 3);
-    assert.equal(resp.responses[1].questionIndex, 2);
-    assert.equal(resp.responses[1].questionPrompt, 'Como você se sentiu ao gerar o relatório?');
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+
+    // Now admin view reports locked = true
+    const adminView = authenticateAdminSession(tempDir, pin, CREATOR_SESSION, now + 1100);
+    assert.equal(adminView.status, 200);
+    assert.equal(adminView.room?.locked, true);
+
+    // Further config edits return 409 Conflict
+    const blocked = updateRoomConfig(
+      tempDir,
+      pin,
+      { instrument: 'e-sam', scale: 5 },
+      CREATOR_SESSION,
+      now + 1200
+    );
+    assert.equal(blocked.status, 409);
+  });
+
+  it('validates creator email ownership, adds questions live, enforces 30-day retention, and allows deletion', () => {
+    const now = 1_700_000_000_000;
+    const created = createOrImportRoom(
+      tempDir,
+      {
+        title: 'Sala Multi-Questão',
+        question: 'Questão 1: Tela inicial?',
+        contextType: 'system',
+        scale: 5,
+      },
+      CREATOR_SESSION,
+      now
+    );
+    assert.ok(created.room);
+    const pin = created.room.pin;
+
+    assert.equal(verifyRoomCreatorEmail(tempDir, pin, CREATOR_EMAIL, now).status, 200);
+    assert.equal(verifyRoomCreatorEmail(tempDir, pin, 'errado@uni.br', now).status, 403);
+    assert.equal(authenticateAdminSession(tempDir, pin, OTHER_SESSION, now).status, 403);
+
+    const added = addQuestionToRoom(tempDir, pin, { prompt: 'Questão 2: Checkout?' }, CREATOR_SESSION, now + 100);
+    assert.equal(added.status, 201);
+    assert.equal(added.room?.questions.length, 2);
+
+    // Still active before 30 days
+    assert.equal(getPublicRoom(tempDir, pin, now + RETENTION_MS - 1000).status, 200);
+
+    // Delete works for creator
+    const deleted = deleteRoom(tempDir, pin, CREATOR_SESSION, now + 2000);
+    assert.equal(deleted.status, 200);
+    assert.equal(getPublicRoom(tempDir, pin, now + 2100).status, 404);
+
+    // Retention cleanup removes expired rooms after 30 days
+    const expRoom = createOrImportRoom(
+      tempDir,
+      { title: 'Sala Expirada', question: 'Pergunta de expiração?', contextType: 'extension', scale: 5 },
+      CREATOR_SESSION,
+      now
+    );
+    assert.ok(expRoom.room);
+    const cleaned = cleanupExpiredRooms(tempDir, now + RETENTION_MS + 1000);
+    assert.equal(cleaned.removed, 1);
+    assert.equal(cleaned.remaining, 0);
+  });
 });

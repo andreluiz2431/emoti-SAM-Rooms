@@ -1,90 +1,121 @@
 import React from 'react';
-import type { DimensionMeta, ScaleType } from '../utils/emotiSam';
-import { EmotiSamFace } from './EmotiSamFaces';
+import {
+  getOrderedAnchors,
+  getOrderedScaleScores,
+  type DimensionCustomization,
+  type DimensionKey,
+  type InstrumentType,
+  type ScaleType,
+} from '../utils/emotiSam';
+import { InstrumentFigure } from './InstrumentFigure';
 
 interface EmotiSamRowProps {
-  dimension: DimensionMeta;
+  dimensionKey: DimensionKey;
+  dimensionConfig: DimensionCustomization;
+  instrument: InstrumentType;
   scale: ScaleType;
+  showDimensionTexts: boolean;
   value: number | null;
   onChange: (score: number) => void;
   hasError?: boolean;
+  compact?: boolean;
+  idPrefix?: string;
 }
 
-const ANCHORS_5: (5 | 4 | 3 | 2 | 1)[] = [5, 4, 3, 2, 1];
-const ANCHOR_MAP_9: Record<5 | 4 | 3 | 2 | 1, number> = {
-  5: 9,
-  4: 7,
-  3: 5,
-  2: 3,
-  1: 1,
-};
-
 export const EmotiSamRow: React.FC<EmotiSamRowProps> = ({
-  dimension,
+  dimensionKey,
+  dimensionConfig,
+  instrument,
   scale,
+  showDimensionTexts,
   value,
   onChange,
   hasError = false,
+  compact = false,
+  idPrefix = 'dim',
 }) => {
-  const headingId = `dim-heading-${dimension.key}`;
+  const headingId = `${idPrefix}-heading-${dimensionKey}`;
+  const orderedAnchors = getOrderedAnchors(scale, dimensionConfig.order);
+  const orderedScores = getOrderedScaleScores(scale, dimensionConfig.order);
 
   return (
     <section
       aria-labelledby={headingId}
-      className={`rounded-xl bg-white p-3.5 sm:p-6 transition-colors border ${
+      className={`rounded-xl bg-white ${compact ? 'p-3.5 sm:p-4' : 'p-4 sm:p-6'} transition-colors border ${
         hasError ? 'border-red-400 ring-2 ring-red-100' : 'border-slate-200'
       }`}
     >
-      <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between gap-1 mb-5">
-        <div>
-          <h3 id={headingId} className="text-lg font-bold text-slate-900">
-            {dimension.title}
-          </h3>
-          <p className="text-sm text-slate-600">{dimension.subtitle}</p>
+      {showDimensionTexts ? (
+        <div className={`flex flex-col sm:flex-row sm:items-baseline sm:justify-between gap-1 ${compact ? 'mb-3' : 'mb-5'}`}>
+          <div>
+            <h3 id={headingId} className={`${compact ? 'text-sm sm:text-base' : 'text-lg'} font-bold text-slate-900`}>
+              {dimensionConfig.title}
+            </h3>
+            {dimensionConfig.subtitle && (
+              <p className={`${compact ? 'text-xs' : 'text-sm'} text-slate-600`}>
+                {dimensionConfig.subtitle}
+              </p>
+            )}
+          </div>
+          <div className="text-xs font-mono tabular-nums text-slate-500">
+            {value !== null ? (
+              <span className="font-semibold text-blue-700">
+                Selecionado: {value} / {scale}
+              </span>
+            ) : (
+              <span>1 opção ({scale} pts)</span>
+            )}
+          </div>
         </div>
-        <div className="text-xs font-mono tabular-nums text-slate-500">
-          {value !== null ? (
-            <span className="font-semibold text-blue-700">Selecionado: {value} / {scale}</span>
-          ) : (
-            <span>Escolha 1 opção ({scale} pontos)</span>
-          )}
-        </div>
-      </div>
+      ) : (
+        <h3 id={headingId} className="sr-only">
+          {dimensionConfig.title}
+        </h3>
+      )}
 
-      {scale === 5 ? (
+      {scale === 3 || scale === 5 ? (
         <div
           role="radiogroup"
           aria-labelledby={headingId}
-          className="grid grid-cols-5 gap-1.5 sm:gap-4"
+          className={`grid ${scale === 3 ? 'grid-cols-3 gap-2.5 sm:gap-5 max-w-2xl mx-auto' : 'grid-cols-5 gap-1.5 sm:gap-4'}`}
         >
-          {ANCHORS_5.map((score, idx) => {
-            const meta = dimension.anchors5[idx];
+          {orderedAnchors.map(({ anchorLevel, score }) => {
             const selected = value === score;
+            const altText = dimensionConfig.altTexts[anchorLevel];
+            const customImg = dimensionConfig.customImages?.[anchorLevel];
+
             return (
               <button
                 key={score}
                 type="button"
                 role="radio"
                 aria-checked={selected}
-                aria-label={`${dimension.title}: ${meta.label} (nota ${score} de 5)`}
+                aria-label={`${dimensionConfig.title} — ${altText} (nota ${score} de ${scale})`}
                 onClick={() => onChange(score)}
-                className={`group flex flex-col items-center justify-between rounded-xl border px-1 py-2.5 sm:p-4 min-h-[112px] sm:min-h-[132px] transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2 cursor-pointer ${
+                className={`group flex flex-col items-center justify-between rounded-xl border ${
+                  compact ? 'px-1.5 py-2.5 min-h-[86px]' : 'px-1.5 py-3 sm:p-4 min-h-[104px] sm:min-h-[126px]'
+                } transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2 cursor-pointer ${
                   selected
                     ? 'border-blue-700 bg-blue-50/70 ring-2 ring-blue-600/20 -translate-y-0.5'
                     : 'border-slate-200 bg-slate-50/50 hover:border-slate-300 hover:bg-white'
                 }`}
               >
-                <EmotiSamFace
-                  dimension={dimension.key}
-                  anchorLevel={score}
-                  scaleVariant={5}
-                  className="w-11 h-10 sm:w-20 sm:h-16 transition-transform duration-150 group-hover:scale-105"
+                <InstrumentFigure
+                  instrument={instrument}
+                  dimension={dimensionKey}
+                  anchorLevel={anchorLevel}
+                  altText={altText}
+                  customImage={customImg}
+                  className={
+                    compact
+                      ? 'w-11 h-10 sm:w-14 sm:h-12 transition-transform duration-150 group-hover:scale-105'
+                      : 'w-12 h-11 sm:w-20 sm:h-16 transition-transform duration-150 group-hover:scale-105'
+                  }
                 />
-                <span className="mt-2 w-full text-center text-[10px] sm:text-xs font-medium text-slate-700 leading-tight tracking-tight sm:tracking-normal break-words">
-                  {meta.label}
-                </span>
+
                 <span
-                  className={`mt-1.5 inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-mono font-bold tabular-nums transition-colors ${
+                  aria-hidden="true"
+                  className={`mt-2.5 inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-mono font-bold tabular-nums transition-colors ${
                     selected
                       ? 'bg-blue-700 text-white'
                       : 'bg-white border border-slate-300 text-slate-700 group-hover:border-slate-400'
@@ -98,13 +129,14 @@ export const EmotiSamRow: React.FC<EmotiSamRowProps> = ({
         </div>
       ) : (
         <div>
-          {/* 9-point scale: 5 anchor faces aligned over columns 9, 7, 5, 3, 1 */}
+          {/* 9-point scale: 5 purely pictorial anchor figures aligned over columns 1, 3, 5, 7, 9 */}
           <div className="grid grid-cols-9 gap-1 sm:gap-2 items-end mb-3">
-            {ANCHORS_5.map((anchorLevel, idx) => {
-              const targetScore = ANCHOR_MAP_9[anchorLevel];
-              const colStart = idx * 2 + 1; // 1, 3, 5, 7, 9
-              const meta = dimension.anchors5[idx];
-              const isFaceSelected = value === targetScore;
+            {orderedAnchors.map(({ anchorLevel, score }, idx) => {
+              const colStart = idx * 2 + 1;
+              const altText = dimensionConfig.altTexts[anchorLevel];
+              const customImg = dimensionConfig.customImages?.[anchorLevel];
+              const isFaceSelected = value === score;
+
               return (
                 <div
                   key={anchorLevel}
@@ -113,46 +145,55 @@ export const EmotiSamRow: React.FC<EmotiSamRowProps> = ({
                 >
                   <button
                     type="button"
-                    onClick={() => onChange(targetScore)}
-                    title={`Selecionar ${meta.label} (nota ${targetScore})`}
-                    aria-label={`Selecionar figura ${meta.label}, nota ${targetScore} de 9`}
-                    className={`group flex flex-col items-center rounded-lg p-1 sm:p-2 transition-transform duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 ${
+                    onClick={() => onChange(score)}
+                    aria-label={`${dimensionConfig.title} — ${altText} (nota ${score} de 9)`}
+                    className={`group flex flex-col items-center rounded-lg p-1 sm:p-1.5 transition-transform duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 ${
                       isFaceSelected ? 'scale-105 bg-blue-50/70' : 'hover:scale-105'
                     }`}
                   >
-                    <EmotiSamFace
-                      dimension={dimension.key}
+                    <InstrumentFigure
+                      instrument={instrument}
+                      dimension={dimensionKey}
                       anchorLevel={anchorLevel}
-                      scaleVariant={9}
-                      className="w-10 h-9 sm:w-16 sm:h-14 md:w-20 md:h-16"
+                      altText={altText}
+                      customImage={customImg}
+                      className={
+                        compact
+                          ? 'w-9 h-8 sm:w-12 sm:h-11'
+                          : 'w-10 h-9 sm:w-16 sm:h-14 md:w-20 md:h-16'
+                      }
                     />
-                    <span className="hidden sm:block mt-1 text-[11px] font-medium text-slate-600 text-center leading-tight whitespace-nowrap">
-                      {meta.label}
-                    </span>
                   </button>
                 </div>
               );
             })}
           </div>
 
-          {/* 9 radio points directly underneath (9 down to 1) */}
+          {/* 9 radio points directly underneath (standardized 1..9 in the configured direction) */}
           <div
             role="radiogroup"
             aria-labelledby={headingId}
             className="grid grid-cols-9 gap-1 sm:gap-2 pt-2 border-t border-slate-100"
           >
-            {[9, 8, 7, 6, 5, 4, 3, 2, 1].map((score) => {
+            {orderedScores.map((score) => {
               const selected = value === score;
               const isIntermediate = score % 2 === 0;
+              const anchorMatch = orderedAnchors.find((a) => a.score === score);
+              const desc = anchorMatch
+                ? dimensionConfig.altTexts[anchorMatch.anchorLevel]
+                : `Ponto intermediário, nota ${score} de 9`;
+
               return (
                 <button
                   key={score}
                   type="button"
                   role="radio"
                   aria-checked={selected}
-                  aria-label={`${dimension.title}: nota ${score} de 9${isIntermediate ? ' (ponto intermediário)' : ''}`}
+                  aria-label={`${dimensionConfig.title} — ${desc} (nota ${score} de 9)`}
                   onClick={() => onChange(score)}
-                  className={`flex flex-col items-center justify-center rounded-lg py-2 px-1 min-h-[46px] transition-all duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 ${
+                  className={`flex flex-col items-center justify-center rounded-lg ${
+                    compact ? 'py-1.5 min-h-[40px]' : 'py-2 min-h-[46px]'
+                  } px-1 transition-all duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 ${
                     selected
                       ? 'bg-blue-700 text-white shadow-sm'
                       : isIntermediate
@@ -161,6 +202,7 @@ export const EmotiSamRow: React.FC<EmotiSamRowProps> = ({
                   }`}
                 >
                   <span
+                    aria-hidden="true"
                     className={`w-4 h-4 rounded-full border-2 flex items-center justify-center mb-1 ${
                       selected ? 'border-white bg-white' : 'border-slate-400 bg-white'
                     }`}
@@ -171,10 +213,6 @@ export const EmotiSamRow: React.FC<EmotiSamRowProps> = ({
                 </button>
               );
             })}
-          </div>
-          <div className="flex items-center justify-between text-[11px] text-slate-500 mt-2 px-1">
-            <span>{dimension.highLabel}</span>
-            <span>{dimension.lowLabel}</span>
           </div>
         </div>
       )}

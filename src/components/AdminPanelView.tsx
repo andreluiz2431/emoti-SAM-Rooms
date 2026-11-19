@@ -3,41 +3,51 @@ import QRCode from 'qrcode';
 import {
   ArrowLeft,
   Check,
+  ChevronDown,
+  ChevronUp,
   Clock,
   Copy,
   Download,
   FileJson,
   FileSpreadsheet,
   ListChecks,
+  Lock,
   Maximize2,
   Minimize2,
   Plus,
   RefreshCw,
+  Save,
   Search,
+  Settings2,
   Trash2,
   Users,
 } from 'lucide-react';
 import {
-  DIMENSIONS,
+  DIMENSION_KEYS,
   buildRoomCsv,
   buildRoomExportJson,
-  computeDimensionStats,
+  countUniqueRespondents,
+  createDefaultInstrumentConfig,
   formatRemainingRetention,
   getContextLabel,
+  getInstrumentLabel,
   getRoomQuestionsList,
+  type InstrumentConfig,
   type RoomAdmin,
 } from '../utils/emotiSam';
+import { InstrumentConfigurator } from './InstrumentConfigurator';
+import { ScientificCharts } from './ScientificCharts';
 
 interface AdminPanelViewProps {
   initialRoom: RoomAdmin;
-  creatorCpf: string;
+  creatorToken: string;
   onExitHome: () => void;
   onRoomDeleted: () => void;
 }
 
 export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
   initialRoom,
-  creatorCpf,
+  creatorToken,
   onExitHome,
   onRoomDeleted,
 }) => {
@@ -56,7 +66,30 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState('');
 
+  // Editable config state (unlocked ONLY when responses.length === 0)
+  const [configOpen, setConfigOpen] = useState(false);
+  const [draftConfig, setDraftConfig] = useState<InstrumentConfig>(() =>
+    initialRoom.instrumentConfig || createDefaultInstrumentConfig(initialRoom.instrument || 'e-sam', initialRoom.scale)
+  );
+  const [draftRequireName, setDraftRequireName] = useState(Boolean(initialRoom.requireParticipantName));
+  const [draftAllowComments, setDraftAllowComments] = useState(initialRoom.allowComments !== false);
+  const [savingConfig, setSavingConfig] = useState(false);
+  const [configMessage, setConfigMessage] = useState('');
+  const [configError, setConfigError] = useState('');
+
+  const isLocked = room.locked || room.responses.length > 0;
   const questions = useMemo(() => getRoomQuestionsList(room), [room]);
+  const instrumentConfig = useMemo(
+    () => room.instrumentConfig || createDefaultInstrumentConfig(room.instrument || 'e-sam', room.scale),
+    [room.instrumentConfig, room.instrument, room.scale]
+  );
+
+  // Sync draft when room transitions to locked
+  useEffect(() => {
+    if (isLocked && configOpen) {
+      setConfigOpen(false);
+    }
+  }, [isLocked, configOpen]);
 
   const shareUrl = useMemo(() => {
     if (typeof window === 'undefined') return `/?pin=${room.pin}`;
@@ -82,7 +115,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
     };
   }, [shareUrl]);
 
-  // Live 30-day retention countdown clock (updates every 30s)
+  // Live 30-day retention countdown clock
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 30000);
     return () => clearInterval(timer);
@@ -94,8 +127,11 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
     try {
       const res = await fetch(`/api/rooms/${room.pin}/admin`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cpf: creatorCpf }),
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${creatorToken}`,
+        },
+        body: JSON.stringify({}),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -107,9 +143,9 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
     } finally {
       setRefreshing(false);
     }
-  }, [room.pin, creatorCpf]);
+  }, [room.pin, creatorToken]);
 
-  // Automatic polling every 5 seconds for live Kahoot-style room updates
+  // Automatic polling every 5 seconds for live updates
   useEffect(() => {
     const interval = setInterval(() => {
       refreshRoom();
@@ -124,17 +160,36 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
     );
   }, [room.responses, selectedQuestionId, questions]);
 
-  const statsList = useMemo(() => {
-    return DIMENSIONS.map((dim) =>
-      computeDimensionStats(scopedResponses, room.scale, dim.key, dim.title)
-    );
-  }, [scopedResponses, room.scale]);
+  const uniqueRespondentsCount = useMemo(
+    () => countUniqueRespondents(scopedResponses),
+    [scopedResponses]
+  );
 
-  const overallStatsList = useMemo(() => {
-    return DIMENSIONS.map((dim) =>
-      computeDimensionStats(room.responses, room.scale, dim.key, dim.title)
-    );
-  }, [room.responses, room.scale]);
+  const totalUniqueRespondents = useMemo(
+    () => countUniqueRespondents(room.responses),
+    [room.responses]
+  );
+
+  const dimensionMeans = useMemo(() => {
+    const n = scopedResponses.length;
+    return DIMENSION_KEYS.map((key) => {
+      const sum = scopedResponses.reduce((acc, r) => acc + r[key], 0);
+      return {
+        key,
+        title: instrumentConfig.dimensions[key].title,
+        mean: n > 0 ? sum / n : 0,
+        count: n,
+      };
+    });
+  }, [scopedResponses, instrumentConfig]);
+
+  const overallMeans = useMemo(() => {
+    const n = room.responses.length;
+    return DIMENSION_KEYS.map((key) => {
+      const sum = room.responses.reduce((acc, r) => acc + r[key], 0);
+      return n > 0 ? sum / n : 0;
+    });
+  }, [room.responses]);
 
   const filteredResponses = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -144,11 +199,46 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
     if (!q) return sorted;
     return sorted.filter(
       (r) =>
-        r.participantName.toLowerCase().includes(q) ||
+        (r.userId && r.userId.toLowerCase().includes(q)) ||
+        (r.participantName && r.participantName.toLowerCase().includes(q)) ||
         (r.comment && r.comment.toLowerCase().includes(q)) ||
         (r.questionPrompt && r.questionPrompt.toLowerCase().includes(q))
     );
   }, [scopedResponses, searchQuery]);
+
+  const handleSaveConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isLocked) return;
+    setConfigError('');
+    setConfigMessage('');
+    setSavingConfig(true);
+    try {
+      const res = await fetch(`/api/rooms/${room.pin}/config`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${creatorToken}`,
+        },
+        body: JSON.stringify({
+          instrument: draftConfig.instrument,
+          scale: draftConfig.scale,
+          instrumentConfig: draftConfig,
+          requireParticipantName: draftRequireName,
+          allowComments: draftAllowComments,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || 'Não foi possível salvar as configurações.');
+      }
+      setRoom(data.room as RoomAdmin);
+      setConfigMessage('Configurações do instrumento atualizadas com sucesso.');
+    } catch (err) {
+      setConfigError(err instanceof Error ? err.message : 'Erro ao salvar configurações.');
+    } finally {
+      setSavingConfig(false);
+    }
+  };
 
   const handleAddQuestion = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -162,8 +252,11 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
     try {
       const res = await fetch(`/api/rooms/${room.pin}/questions`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cpf: creatorCpf, prompt }),
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${creatorToken}`,
+        },
+        body: JSON.stringify({ prompt }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -184,7 +277,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
       setCopiedLink(true);
       setTimeout(() => setCopiedLink(false), 2000);
     } catch {
-      // Fallback ignored if clipboard unavailable
+      // Ignore if clipboard unavailable
     }
   };
 
@@ -194,7 +287,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `emoti-sam-sala-${room.pin}.csv`;
+    link.download = `e-sam-sala-${room.pin}.csv`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -209,7 +302,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `emoti-sam-sala-${room.pin}-completo.json`;
+    link.download = `e-sam-sala-${room.pin}-completo.json`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -222,8 +315,10 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
     try {
       const res = await fetch(`/api/rooms/${room.pin}`, {
         method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cpf: creatorCpf }),
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${creatorToken}`,
+        },
       });
       const data = await res.json();
       if (!res.ok) {
@@ -245,7 +340,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
         <div className="flex items-center justify-between gap-4">
           <div>
             <p className="text-xs font-mono text-slate-400">
-              emoti-SAM Rooms · {getContextLabel(room.contextType)} · Escala {room.scale} pontos
+              e-SAM (electronic SAM) · {getInstrumentLabel(instrumentConfig.instrument)} · {getContextLabel(room.contextType)} · Escala {room.scale} pontos
             </p>
             <h1 className="text-2xl sm:text-3xl font-bold mt-1">{room.title}</h1>
           </div>
@@ -276,11 +371,11 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
               <p className="text-xs sm:text-sm font-mono text-slate-300 break-all pt-1">{shareUrl}</p>
             </div>
 
-            <div className="flex items-center gap-6">
+            <div className="flex flex-wrap items-center gap-6">
               <div>
-                <span className="block text-xs text-slate-400">Avaliações recebidas</span>
+                <span className="block text-xs text-slate-400">Respondentes únicos</span>
                 <span className="text-4xl font-mono font-bold tabular-nums text-emerald-400">
-                  {room.responses.length}
+                  {totalUniqueRespondents}
                 </span>
               </div>
               <div className="h-10 w-px bg-slate-700" />
@@ -294,7 +389,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
               <div>
                 <span className="block text-xs text-slate-400">Valência / Excitação / Dominância</span>
                 <span className="text-xl font-mono font-semibold tabular-nums text-white">
-                  {overallStatsList[0].mean.toFixed(1)} · {overallStatsList[1].mean.toFixed(1)} · {overallStatsList[2].mean.toFixed(1)}
+                  {overallMeans[0].toFixed(1)} · {overallMeans[1].toFixed(1)} · {overallMeans[2].toFixed(1)}
                 </span>
               </div>
             </div>
@@ -392,13 +487,15 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
         <div className="lg:col-span-8 rounded-xl border border-slate-200 bg-white p-6 flex flex-col justify-between gap-5">
           <div className="space-y-2">
             <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+              <span className="font-semibold text-slate-700">{getInstrumentLabel(instrumentConfig.instrument)}</span>
+              <span aria-hidden="true">·</span>
               <span>{getContextLabel(room.contextType)}</span>
               <span aria-hidden="true">·</span>
               <span>Escala de {room.scale} pontos</span>
               <span aria-hidden="true">·</span>
               <span>{questions.length} {questions.length === 1 ? 'questão' : 'questões'}</span>
               <span aria-hidden="true">·</span>
-              <span>Criada em {new Date(room.createdAt).toLocaleDateString('pt-BR')}</span>
+              <span>{room.requireParticipantName ? 'Identificação obrigatória' : 'Participação anônima'}</span>
             </div>
             <h1 className="text-2xl sm:text-3xl font-bold text-slate-900">{room.title}</h1>
             <p className="text-base text-slate-700">
@@ -417,13 +514,18 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
             <div>
               <span className="text-xs text-slate-500 flex items-center gap-1">
                 <Users className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>Avaliações {selectedQuestionId !== 'all' ? '(filtro)' : ''}</span>
+                <span>Respondentes únicos</span>
               </span>
               <span className="mt-1 block text-2xl font-mono font-bold tabular-nums text-slate-900">
-                {scopedResponses.length}
+                {uniqueRespondentsCount}
               </span>
+              {scopedResponses.length !== uniqueRespondentsCount && (
+                <span className="text-[11px] font-mono text-slate-500 tabular-nums">
+                  {scopedResponses.length} avaliações
+                </span>
+              )}
             </div>
-            {statsList.map((stat) => (
+            {dimensionMeans.map((stat) => (
               <div key={stat.key}>
                 <span className="text-xs text-slate-500 truncate block">{stat.title.split(' / ')[0]} (Média)</span>
                 <span className="mt-1 block text-2xl font-mono font-bold tabular-nums text-blue-700">
@@ -474,18 +576,136 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
         </div>
       </div>
 
+      {/* Methodological Integrity Lock / Pre-Response Instrument Config Editor */}
+      {isLocked ? (
+        <section
+          aria-labelledby="methodological-lock-heading"
+          className="rounded-xl border border-slate-300 bg-slate-100/80 p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+        >
+          <div className="flex items-start gap-3">
+            <Lock className="w-5 h-5 text-slate-700 shrink-0 mt-0.5" aria-hidden="true" />
+            <div className="space-y-1">
+              <h2 id="methodological-lock-heading" className="text-sm font-bold text-slate-900">
+                Configurações do Instrumento Bloqueadas (Integridade Metodológica)
+              </h2>
+              <p className="text-xs text-slate-700 leading-relaxed">
+                Esta sala já recebeu respostas. Para preservar a validade científica e comparabilidade dos dados, o instrumento ({getInstrumentLabel(instrumentConfig.instrument)}), a escala ({room.scale} pontos), a ordenação das dimensões, as figuras e a exigência de identificação foram bloqueados permanentemente. Para testar outra configuração, exporte o arquivo <code className="font-mono">.json</code> e clone em uma nova sala.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleDownloadJson}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50 transition-colors cursor-pointer whitespace-nowrap self-start sm:self-center shrink-0"
+          >
+            <FileJson className="w-3.5 h-3.5 text-blue-700" aria-hidden="true" />
+            <span>Exportar para Clonar (.json)</span>
+          </button>
+        </section>
+      ) : (
+        <section aria-labelledby="room-config-heading" className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+          <button
+            type="button"
+            onClick={() => {
+              if (!configOpen) {
+                setDraftConfig(instrumentConfig);
+                setDraftRequireName(Boolean(room.requireParticipantName));
+                setDraftAllowComments(room.allowComments !== false);
+                setConfigMessage('');
+                setConfigError('');
+              }
+              setConfigOpen((v) => !v);
+            }}
+            aria-expanded={configOpen}
+            className="w-full px-6 py-4 flex items-center justify-between gap-3 text-left hover:bg-slate-50/80 transition-colors cursor-pointer"
+          >
+            <div className="flex items-center gap-2.5">
+              <Settings2 className="w-5 h-5 text-blue-700 shrink-0" aria-hidden="true" />
+              <div>
+                <h2 id="room-config-heading" className="text-sm sm:text-base font-bold text-slate-900">
+                  Editar Configurações do Instrumento (Liberado até a 1ª resposta)
+                </h2>
+                <p className="text-xs text-slate-500">
+                  Ajuste instrumento, escala (3/5/9), ordenação, textos, imagens ou identificação enquanto não houver respostas registradas.
+                </p>
+              </div>
+            </div>
+            {configOpen ? (
+              <ChevronUp className="w-4 h-4 text-slate-500 shrink-0" aria-hidden="true" />
+            ) : (
+              <ChevronDown className="w-4 h-4 text-slate-500 shrink-0" aria-hidden="true" />
+            )}
+          </button>
+
+          {configOpen && (
+            <form onSubmit={handleSaveConfig} className="px-6 pb-6 pt-4 border-t border-slate-100 space-y-5">
+              <InstrumentConfigurator
+                config={draftConfig}
+                onChange={setDraftConfig}
+                idPrefix="admin-edit"
+              />
+
+              <div className="space-y-2.5 pt-3 border-t border-slate-200">
+                <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={draftRequireName}
+                    onChange={(e) => setDraftRequireName(e.target.checked)}
+                    className="h-4 w-4 rounded border-slate-300 text-blue-700 focus:ring-blue-600"
+                  />
+                  <span className="text-sm font-medium text-slate-800">
+                    Exigir identificação do respondente
+                  </span>
+                </label>
+                <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={draftAllowComments}
+                    onChange={(e) => setDraftAllowComments(e.target.checked)}
+                    className="h-4 w-4 rounded border-slate-300 text-blue-700 focus:ring-blue-600"
+                  />
+                  <span className="text-sm font-medium text-slate-800">
+                    Permitir campo opcional de comentário aberto
+                  </span>
+                </label>
+              </div>
+
+              {configError && (
+                <p role="alert" className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                  {configError}
+                </p>
+              )}
+              {configMessage && (
+                <p className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+                  {configMessage}
+                </p>
+              )}
+
+              <div className="flex justify-end">
+                <button
+                  type="submit"
+                  disabled={savingConfig}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-blue-700 px-5 py-2.5 text-xs font-semibold text-white hover:bg-blue-800 transition-colors cursor-pointer disabled:opacity-60"
+                >
+                  <Save className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>{savingConfig ? 'Salvando...' : 'Salvar Configurações'}</span>
+                </button>
+              </div>
+            </form>
+          )}
+        </section>
+      )}
+
       {/* Questions Management & Add Question Live */}
       <section aria-labelledby="questions-manage-heading" className="rounded-xl border border-slate-200 bg-white p-6 space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <div>
-            <h2 id="questions-manage-heading" className="text-lg font-bold text-slate-900 flex items-center gap-2">
-              <ListChecks className="w-5 h-5 text-blue-700" aria-hidden="true" />
-              <span>Questões da Sala ({questions.length})</span>
-            </h2>
-            <p className="text-xs text-slate-500">
-              Você pode adicionar novas perguntas a qualquer momento; novos participantes verão todas as questões em sequência.
-            </p>
-          </div>
+        <div>
+          <h2 id="questions-manage-heading" className="text-lg font-bold text-slate-900 flex items-center gap-2">
+            <ListChecks className="w-5 h-5 text-blue-700" aria-hidden="true" />
+            <span>Questões da Sala ({questions.length})</span>
+          </h2>
+          <p className="text-xs text-slate-500">
+            Você pode adicionar novas perguntas a qualquer momento; novos participantes verão todas as questões em sequência.
+          </p>
         </div>
 
         <ol className="space-y-2">
@@ -541,146 +761,79 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
         )}
       </section>
 
-      {/* Visual Distribution (Figure 9 Style - Hayashi et al., 2016) */}
-      <section aria-labelledby="charts-heading" className="rounded-xl border border-slate-200 bg-white p-6 space-y-5">
-        <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2">
-          <div>
-            <h2 id="charts-heading" className="text-lg font-bold text-slate-900">
-              Distribuição Afetiva (Estilo Figura 9 — Hayashi et al., 2016)
-            </h2>
-            <p className="text-xs text-slate-500">
-              Barras empilhadas proporcionais da menor nota (vermelho) à maior nota (verde escuro).
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-600">
-            <span className="inline-flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-sm bg-[#DC2626]" /> Negativo (1)
-            </span>
-            <span className="inline-flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-sm bg-[#64748B]" /> Neutro ({room.scale === 9 ? 5 : 3})
-            </span>
-            <span className="inline-flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-sm bg-[#15803D]" /> Positivo ({room.scale})
-            </span>
-          </div>
+      {/* Question Filter Tabs for Scientific Charts */}
+      {questions.length > 1 && (
+        <div className="flex flex-wrap items-center gap-1.5" role="tablist" aria-label="Filtrar gráficos por questão">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={selectedQuestionId === 'all'}
+            onClick={() => setSelectedQuestionId('all')}
+            className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors cursor-pointer ${
+              selectedQuestionId === 'all'
+                ? 'bg-slate-900 text-white'
+                : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
+            }`}
+          >
+            Todas ({room.responses.length})
+          </button>
+          {questions.map((q, idx) => {
+            const count = room.responses.filter(
+              (r) => (r.questionId || questions[0]?.id || 'q1') === q.id
+            ).length;
+            return (
+              <button
+                key={q.id}
+                type="button"
+                role="tab"
+                aria-selected={selectedQuestionId === q.id}
+                onClick={() => setSelectedQuestionId(q.id)}
+                className={`rounded-lg px-3 py-1.5 text-xs font-mono font-semibold transition-colors cursor-pointer ${
+                  selectedQuestionId === q.id
+                    ? 'bg-blue-700 text-white'
+                    : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                Q{idx + 1} ({count})
+              </button>
+            );
+          })}
         </div>
+      )}
 
-        {questions.length > 1 && (
-          <div className="flex flex-wrap items-center gap-1.5 pt-1" role="tablist" aria-label="Filtrar gráficos por questão">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={selectedQuestionId === 'all'}
-              onClick={() => setSelectedQuestionId('all')}
-              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors cursor-pointer ${
-                selectedQuestionId === 'all'
-                  ? 'bg-slate-900 text-white'
-                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-              }`}
-            >
-              Todas ({room.responses.length})
-            </button>
-            {questions.map((q, idx) => {
-              const count = room.responses.filter(
-                (r) => (r.questionId || questions[0]?.id || 'q1') === q.id
-              ).length;
-              return (
-                <button
-                  key={q.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={selectedQuestionId === q.id}
-                  onClick={() => setSelectedQuestionId(q.id)}
-                  className={`rounded-lg px-3 py-1.5 text-xs font-mono font-semibold transition-colors cursor-pointer ${
-                    selectedQuestionId === q.id
-                      ? 'bg-blue-700 text-white'
-                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                  }`}
-                >
-                  Q{idx + 1} ({count})
-                </button>
-              );
-            })}
-          </div>
-        )}
+      {/* Scientific Visualizations (Hayashi et al., 2016) */}
+      {scopedResponses.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-slate-200 bg-white py-12 px-6 text-center space-y-2">
+          <p className="text-sm font-semibold text-slate-800">
+            Nenhuma resposta registrada {selectedQuestionId !== 'all' ? 'para esta questão ' : ''}ainda
+          </p>
+          <p className="text-xs text-slate-500 max-w-md mx-auto">
+            Projete o PIN <strong className="font-mono">{room.pin}</strong> ou o QR Code acima para os
+            participantes. Os gráficos (Barras Divergentes, Boxplots e Mapa Afetivo 2D) aparecerão automaticamente aqui.
+          </p>
+        </div>
+      ) : (
+        <ScientificCharts
+          responses={scopedResponses}
+          scale={room.scale}
+          instrumentConfig={instrumentConfig}
+        />
+      )}
 
-        {scopedResponses.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50/60 py-10 px-4 text-center space-y-2">
-            <p className="text-sm font-semibold text-slate-800">Nenhuma resposta registrada {selectedQuestionId !== 'all' ? 'para esta questão ' : ''}ainda</p>
-            <p className="text-xs text-slate-500 max-w-md mx-auto">
-              Projete o PIN <strong className="font-mono">{room.pin}</strong> ou o QR Code acima para os
-              participantes. Os gráficos atualizarão automaticamente aqui.
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-5">
-            {statsList.map((stat) => (
-              <div key={stat.key} className="space-y-2">
-                <div className="flex items-baseline justify-between text-sm">
-                  <span className="font-semibold text-slate-900">{stat.title}</span>
-                  <span className="font-mono text-xs tabular-nums text-slate-600">
-                    Média: <strong className="text-slate-900">{stat.mean.toFixed(2)}</strong> / {room.scale}
-                  </span>
-                </div>
-
-                {/* Stacked Bar */}
-                <div
-                  className="w-full h-9 rounded-lg overflow-hidden bg-slate-100 flex border border-slate-200"
-                  role="img"
-                  aria-label={`Distribuição de ${stat.title}`}
-                >
-                  {stat.distribution.map((bucket) =>
-                    bucket.count > 0 ? (
-                      <div
-                        key={bucket.score}
-                        style={{
-                          width: `${bucket.percent}%`,
-                          backgroundColor: bucket.color,
-                          color: bucket.textColor,
-                        }}
-                        title={`Nota ${bucket.score}: ${bucket.count} resposta(s) (${bucket.percent}%)`}
-                        className="h-full flex items-center justify-center text-[11px] font-mono font-bold transition-all duration-300 overflow-hidden px-1"
-                      >
-                        {bucket.percent >= 8 ? `${bucket.score} (${Math.round(bucket.percent)}%)` : ''}
-                      </div>
-                    ) : null
-                  )}
-                </div>
-
-                {/* Tabular score counts */}
-                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs font-mono tabular-nums text-slate-600">
-                  {stat.distribution.map((b) => (
-                    <span key={b.score} className="inline-flex items-center gap-1">
-                      <span
-                        className="w-2 h-2 rounded-xs inline-block"
-                        style={{ backgroundColor: b.color }}
-                      />
-                      <span>
-                        {b.score}: <strong>{b.count}</strong> ({b.percent}%)
-                      </span>
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-
-      {/* Individual Responses Table */}
+      {/* Individual Responses Table with ID_Usuario */}
       <section aria-labelledby="responses-heading" className="rounded-xl border border-slate-200 bg-white p-6 space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <h2 id="responses-heading" className="text-lg font-bold text-slate-900">
             Respostas Individuais ({filteredResponses.length})
           </h2>
 
-          <div className="relative w-full sm:w-72">
+          <div className="relative w-full sm:w-80">
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" aria-hidden="true" />
             <input
               type="search"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Filtrar por nome, questão ou comentário..."
+              placeholder="Filtrar por ID_Usuario, nome ou comentário..."
               className="w-full rounded-lg border border-slate-300 bg-slate-50 pl-9 pr-3 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-700 focus:bg-white focus:outline-none"
             />
           </div>
@@ -697,7 +850,8 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
             <table className="w-full text-left border-collapse text-sm">
               <thead>
                 <tr className="border-b border-slate-200 text-xs font-semibold text-slate-500">
-                  <th className="py-2.5 pr-4">Participante</th>
+                  <th className="py-2.5 pr-4">ID_Usuario</th>
+                  <th className="py-2.5 px-3">Participante</th>
                   {questions.length > 1 && <th className="py-2.5 px-3">Questão</th>}
                   <th className="py-2.5 px-3 text-right">Valência</th>
                   <th className="py-2.5 px-3 text-right">Excitação</th>
@@ -709,8 +863,11 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
               <tbody className="divide-y divide-slate-100">
                 {filteredResponses.map((r) => (
                   <tr key={r.id} className="hover:bg-slate-50/70">
-                    <td className="py-2.5 pr-4 font-medium text-slate-900 whitespace-nowrap">
-                      {r.participantName}
+                    <td className="py-2.5 pr-4 font-mono text-xs font-semibold text-slate-700 whitespace-nowrap tabular-nums">
+                      {r.userId}
+                    </td>
+                    <td className="py-2.5 px-3 font-medium text-slate-900 whitespace-nowrap">
+                      {r.participantName ? r.participantName : <span className="text-slate-400 font-normal">Anônimo</span>}
                     </td>
                     {questions.length > 1 && (
                       <td className="py-2.5 px-3 text-xs text-slate-600 max-w-xs">
