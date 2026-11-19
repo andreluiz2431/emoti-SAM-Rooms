@@ -242,6 +242,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
 
   const handleAddQuestion = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isLocked) return;
     setQuestionError('');
     const prompt = newQuestionPrompt.trim();
     if (prompt.length < 5) {
@@ -589,7 +590,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                 Configurações do Instrumento Bloqueadas (Integridade Metodológica)
               </h2>
               <p className="text-xs text-slate-700 leading-relaxed">
-                Esta sala já recebeu respostas. Para preservar a validade científica e comparabilidade dos dados, o instrumento ({getInstrumentLabel(instrumentConfig.instrument)}), a escala ({room.scale} pontos), a ordenação das dimensões, as figuras e a exigência de identificação foram bloqueados permanentemente. Para testar outra configuração, exporte o arquivo <code className="font-mono">.json</code> e clone em uma nova sala.
+                Esta sala já recebeu respostas. Para preservar a validade científica e comparabilidade dos dados, o instrumento ({getInstrumentLabel(instrumentConfig.instrument)}), a escala ({room.scale} pontos), a ordenação das dimensões, as figuras, a exigência de identificação e a lista de questões foram bloqueados permanentemente. Para testar outra configuração, exporte o arquivo <code className="font-mono">.json</code> e clone em uma nova sala.
               </p>
             </div>
           </div>
@@ -696,7 +697,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
         </section>
       )}
 
-      {/* Questions Management & Add Question Live */}
+      {/* Questions Management (locked after 1st response for methodological integrity) */}
       <section aria-labelledby="questions-manage-heading" className="rounded-xl border border-slate-200 bg-white p-6 space-y-4">
         <div>
           <h2 id="questions-manage-heading" className="text-lg font-bold text-slate-900 flex items-center gap-2">
@@ -704,7 +705,9 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
             <span>Questões da Sala ({questions.length})</span>
           </h2>
           <p className="text-xs text-slate-500">
-            Você pode adicionar novas perguntas a qualquer momento; novos participantes verão todas as questões em sequência.
+            {isLocked
+              ? 'Lista de questões bloqueada após o recebimento da 1ª resposta para preservar a integridade metodológica da coleta.'
+              : 'Você pode adicionar novas perguntas enquanto a sala não possuir respostas registradas.'}
           </p>
         </div>
 
@@ -730,34 +733,43 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
           })}
         </ol>
 
-        <form onSubmit={handleAddQuestion} className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5" noValidate>
-          <div className="flex-1">
-            <label htmlFor="admin-add-question" className="sr-only">
-              Nova questão para a sala
-            </label>
-            <input
-              id="admin-add-question"
-              type="text"
-              maxLength={280}
-              value={newQuestionPrompt}
-              onChange={(e) => setNewQuestionPrompt(e.target.value)}
-              placeholder={`Adicionar Questão ${questions.length + 1} (ex.: Como você se sentiu na etapa seguinte?)`}
-              className="w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-600/20"
-            />
+        {isLocked ? (
+          <div className="pt-1 flex items-center gap-2 text-xs text-slate-600">
+            <Lock className="w-3.5 h-3.5 text-slate-500 shrink-0" aria-hidden="true" />
+            <span>Adição de novas questões desativada após o recebimento de respostas.</span>
           </div>
-          <button
-            type="submit"
-            disabled={addingQuestion || questions.length >= 30}
-            className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-blue-700 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-800 transition-colors cursor-pointer disabled:opacity-60 whitespace-nowrap"
-          >
-            <Plus className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>{addingQuestion ? 'Adicionando...' : 'Adicionar Questão'}</span>
-          </button>
-        </form>
-        {questionError && (
-          <p role="alert" className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-            {questionError}
-          </p>
+        ) : (
+          <>
+            <form onSubmit={handleAddQuestion} className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5" noValidate>
+              <div className="flex-1">
+                <label htmlFor="admin-add-question" className="sr-only">
+                  Nova questão para a sala
+                </label>
+                <input
+                  id="admin-add-question"
+                  type="text"
+                  maxLength={280}
+                  value={newQuestionPrompt}
+                  onChange={(e) => setNewQuestionPrompt(e.target.value)}
+                  placeholder={`Adicionar Questão ${questions.length + 1} (ex.: Como você se sentiu na etapa seguinte?)`}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-600/20"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={addingQuestion || questions.length >= 30}
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-blue-700 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-800 transition-colors cursor-pointer disabled:opacity-60 whitespace-nowrap"
+              >
+                <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>{addingQuestion ? 'Adicionando...' : 'Adicionar Questão'}</span>
+              </button>
+            </form>
+            {questionError && (
+              <p role="alert" className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                {questionError}
+              </p>
+            )}
+          </>
         )}
       </section>
 

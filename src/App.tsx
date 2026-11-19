@@ -157,13 +157,19 @@ export default function App() {
         )}
       </main>
 
-      {/* Clean Quiet Footer (PAD link removed per specification) */}
+      {/* Clean Quiet Footer */}
       <footer className="border-t border-slate-200 bg-white">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-5 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-500 text-center sm:text-left">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-5 flex flex-col md:flex-row items-center justify-between gap-2.5 text-xs text-slate-500 text-center md:text-left">
           <span>
             e-SAM (electronic SAM) · Fundamentado em Hayashi et al. (2016) e Lang &amp; Bradley (1994)
           </span>
-          <span className="whitespace-nowrap">Retenção máxima de 30 dias</span>
+          <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
+            <span className="font-medium text-slate-600">
+              Desenvolvido por André Luiz Montanha (2026)
+            </span>
+            <span aria-hidden="true" className="hidden sm:inline">·</span>
+            <span className="whitespace-nowrap">Retenção máxima de 30 dias</span>
+          </div>
         </div>
       </footer>
 

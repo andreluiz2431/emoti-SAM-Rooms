@@ -96,4 +96,23 @@ describe('otpService', () => {
     assert.equal(brevoRes.deliveryMode, 'brevo');
     assert.equal(calls[1].url, 'https://api.brevo.com/v3/smtp/email');
   });
+
+  it('returns actionable guidance when Brevo blocks dynamic server IP (401 unrecognised IP)', async () => {
+    const mockFetch = async () =>
+      new Response(
+        JSON.stringify({
+          message:
+            'We have detected you are using an unrecognised IP address 152.55.180.27. If you performed this action make sure to add the new IP.',
+        }),
+        { status: 401 }
+      );
+    const svc = createOtpService({ fetchImpl: mockFetch });
+    const res = await svc.requestOtp('c@b.com', 1_700_000_000_000, {
+      EMAIL_PROVIDER: 'brevo',
+      EMAIL_API_KEY: 'xkeysib_test',
+      EMAIL_FROM: 'e-SAM <noreply@esam.app>',
+    });
+    assert.equal(res.status, 502);
+    assert.ok('error' in res && typeof res.error === 'string' && res.error.includes('authorised_ips'));
+  });
 });

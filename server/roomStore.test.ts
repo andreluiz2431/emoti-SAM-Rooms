@@ -164,7 +164,7 @@ describe('roomStore persistence, anonymity, ID_Usuario & methodological lock', (
     assert.equal(adminView.status, 200);
     assert.equal(adminView.room?.locked, true);
 
-    // Further config edits return 409 Conflict
+    // Further config edits and adding new questions return 409 Conflict
     const blocked = updateRoomConfig(
       tempDir,
       pin,
@@ -173,6 +173,15 @@ describe('roomStore persistence, anonymity, ID_Usuario & methodological lock', (
       now + 1200
     );
     assert.equal(blocked.status, 409);
+
+    const blockedQuestion = addQuestionToRoom(
+      tempDir,
+      pin,
+      { prompt: 'Nova pergunta bloqueada?' },
+      CREATOR_SESSION,
+      now + 1300
+    );
+    assert.equal(blockedQuestion.status, 409);
   });
 
   it('validates creator email ownership, adds questions live, enforces 30-day retention, and allows deletion', () => {

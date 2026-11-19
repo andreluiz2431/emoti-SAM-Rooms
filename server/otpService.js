@@ -97,7 +97,19 @@ export function createOtpService(options = {}) {
       });
       if (!response.ok) {
         const errText = await response.text().catch(() => '');
-        throw new Error(`Falha ao enviar e-mail via Brevo (${response.status}): ${errText.slice(0, 140)}`);
+        let detail = errText;
+        try {
+          const parsed = JSON.parse(errText);
+          if (typeof parsed?.message === 'string') detail = parsed.message;
+        } catch {
+          // Keep raw text
+        }
+        if (response.status === 401 && /unrecogni[sz]ed ip|authorised?_?ips/i.test(detail)) {
+          throw new Error(
+            'Brevo bloqueou o IP dinâmico do servidor (erro 401). Para liberar envios no Railway, acesse app.brevo.com/security/authorised_ips (Configurações → Segurança → IPs Autorizados) e desative o bloqueio de IPs desconhecidos.'
+          );
+        }
+        throw new Error(`Falha ao enviar e-mail via Brevo (${response.status}): ${detail.slice(0, 280)}`);
       }
       return { delivered: true, deliveryMode: 'brevo' };
     }
@@ -119,7 +131,14 @@ export function createOtpService(options = {}) {
     });
     if (!response.ok) {
       const errText = await response.text().catch(() => '');
-      throw new Error(`Falha ao enviar e-mail via Resend (${response.status}): ${errText.slice(0, 140)}`);
+      let detail = errText;
+      try {
+        const parsed = JSON.parse(errText);
+        if (typeof parsed?.message === 'string') detail = parsed.message;
+      } catch {
+        // Keep raw text
+      }
+      throw new Error(`Falha ao enviar e-mail via Resend (${response.status}): ${detail.slice(0, 280)}`);
     }
     return { delivered: true, deliveryMode: 'resend' };
   }

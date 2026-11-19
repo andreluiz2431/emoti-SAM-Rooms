@@ -62,7 +62,9 @@ Acesse `http://localhost:3000`. Sem `EMAIL_API_KEY`, o código OTP de 6 dígitos
 | `RAILWAY_VOLUME_MOUNT_PATH` | Monte um Volume em `/data` no Railway para persistir `rooms.json` |
 | `EMAIL_PROVIDER` | `resend` (padrão) ou `brevo` |
 | `EMAIL_API_KEY` | Chave de API gratuita do Resend ou Brevo para envio real dos códigos OTP |
-| `EMAIL_FROM` | Remetente (ex.: `e-SAM <onboarding@resend.dev>`) |
+| `EMAIL_FROM` | Remetente (ex.: `e-SAM <onboarding@resend.dev>` ou remetente verificado no Brevo) |
+
+> **Nota para quem usa Brevo no Railway:** Por padrão, a Brevo bloqueia requisições vindas de IPs desconhecidos (erro `401: unrecognised IP address`). Como o Railway utiliza IPs dinâmicos, acesse **Configurações → Segurança → IPs Autorizados** (`https://app.brevo.com/security/authorised_ips`) e clique em **Desativar bloqueio** (*Disable blocking*).
 
 ---
 

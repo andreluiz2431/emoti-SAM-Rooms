@@ -636,6 +636,14 @@ export function addQuestionToRoom(dataDir, pin, payload, creatorSession, now = D
     return { status: 403, error: 'E-mail não autorizado para adicionar questões nesta sala.' };
   }
 
+  if (Array.isArray(room.responses) && room.responses.length >= 1) {
+    return {
+      status: 409,
+      error:
+        'Não é possível adicionar novas questões após o recebimento da primeira resposta para preservar a integridade metodológica. Exporte/clone a sala para criar uma nova.',
+    };
+  }
+
   const questions = getRoomQuestions(room);
   if (questions.length >= 30) {
     return { status: 400, error: 'Limite máximo de 30 questões por sala atingido.' };
