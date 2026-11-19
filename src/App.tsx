@@ -165,7 +165,7 @@ export default function App() {
           </span>
           <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
             <span className="font-medium text-slate-600">
-              Desenvolvido por André Luiz Montanha (2026)
+              Desenvolvido por André Luiz Montanha de Abreu (2026)
             </span>
             <span aria-hidden="true" className="hidden sm:inline">·</span>
             <span className="whitespace-nowrap">Retenção máxima de 30 dias</span>
